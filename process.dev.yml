@@ -1,0 +1,17 @@
+
+apps:
+  - name        : "kalanow-dev" # This name should be unique for your PM2 processes
+    script      : "npm"
+    args        : "run dev" # This will execute the "dev" script from your package.json
+    cwd         : "./" # IMPORTANT: Path relative to where you run `pm2 start`. For local dev, run from project root. For VPS, ensure this path is correct if running from a different directory.
+    watch       : false # Hot reloading is handled by the Next.js dev server itself
+    autorestart : true  # Restart if the app crashes
+    env:
+      NODE_ENV  : "development"
+      # PORT is handled by the "dev" script in package.json (e.g., using ${PORT:-9002})
+      # If you need to force a specific port for PM2 dev, you can set it here.
+      # PORT      : 9002
+    # More detailed logging for PM2 itself (optional)
+    # output      : "./logs/pm2-out.log" # Ensure 'logs' directory exists
+    # error       : "./logs/pm2-err.log" # Ensure 'logs' directory exists
+    # log_date_format: "YYYY-MM-DD HH:mm:ss Z"

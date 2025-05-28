@@ -1,0 +1,30 @@
+
+/
+/admin/login
+/admin/dashboard
+/admin/users
+/admin/orders
+/admin/products
+/admin/categories
+/admin/banners
+/admin/coupons
+/admin/commissions # Linked within settings page
+/admin/landing-pages
+/admin/marketing/sms # Keep marketing namespace for consistency
+/admin/settings
+/admin/reports/payments # Placeholder for future reports
+/auth
+/checkout
+/order/success
+/profile/complete # Part of initial user setup, can be accessed later via user profile link
+/user/dashboard
+/user/profile # Leads to the profile editing page, similar to /profile/complete
+/user/orders
+/user/wallet
+/user/invites
+/user/cheques
+/user/messages
+/user/favorites
+/user/change-password
+/landing/:id # Dynamic route for landing pages
+

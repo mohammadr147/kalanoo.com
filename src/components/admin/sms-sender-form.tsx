@@ -6,11 +6,12 @@ import { useForm, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Button } from '@/components/ui/button';
-import { Textarea } from '@/components/ui/textarea'; // Use Textarea for message
+import { Textarea } from '@/components/ui/textarea';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, Send } from 'lucide-react';
-import { sendPromotionalSms } from '@/app/actions'; // Import the consolidated server action
+import { sendPromotionalSms } from '@/app/actions';
+import { SendSmsSchema } from '@/types'; // Import from types
 import {
     AlertDialog,
     AlertDialogAction,
@@ -23,23 +24,14 @@ import {
     AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-// Validation Schema using Zod
-const sendSmsSchema = z.object({
-  message: z.string()
-    .min(5, { message: "متن پیامک باید حداقل ۵ کاراکتر باشد." })
-    .max(500, { message: "متن پیامک نمی‌تواند بیشتر از ۵۰۰ کاراکتر باشد." }), // Adjusted max length
-  // targetGroup: z.enum(['all_users']).default('all_users'), // Keep for future expansion
-});
-
-type SmsFormData = z.infer<typeof sendSmsSchema>;
+type SmsFormData = z.infer<typeof SendSmsSchema>;
 
 export function SmsSenderForm() {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [characterCount, setCharacterCount] = useState(0);
-  const [smsCount, setSmsCount] = useState(1); // Track number of SMS parts
+  const [smsCount, setSmsCount] = useState(1);
 
-   // Persian SMS limits (approximate, check provider specifics)
    const PERSIAN_SMS_LIMIT_SINGLE = 70;
    const PERSIAN_SMS_LIMIT_MULTI = 67;
 
@@ -47,41 +39,37 @@ export function SmsSenderForm() {
        if (count <= PERSIAN_SMS_LIMIT_SINGLE) {
            return 1;
        }
-       // Ceiling division for multipart SMS
        return Math.ceil(count / PERSIAN_SMS_LIMIT_MULTI);
    };
 
   const form = useForm<SmsFormData>({
-    resolver: zodResolver(sendSmsSchema),
+    resolver: zodResolver(SendSmsSchema),
     defaultValues: {
       message: '',
-      // targetGroup: 'all_users',
+      // targetGroup: 'all_users', // Kept in schema, default handled there
     },
   });
 
-   // Update character count and SMS parts on message change
    const handleMessageChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
        const message = event.target.value;
        const count = message.length;
        setCharacterCount(count);
        setSmsCount(calculateSmsParts(count));
-       form.setValue("message", message); // Ensure react-hook-form is updated
+       form.setValue("message", message, { shouldValidate: true });
    };
 
   const onSubmit: SubmitHandler<SmsFormData> = async (data) => {
-     // Confirmation dialog will handle the actual submission trigger
      console.log("Form data for confirmation:", data);
   };
 
    const handleActualSubmit = async () => {
     setLoading(true);
-    const formData = form.getValues(); // Get latest form values
+    const formData = form.getValues();
 
     try {
-      // Call the server action with the validated data
       const result = await sendPromotionalSms({
           message: formData.message,
-          targetGroup: 'all_users', // Hardcoded for now
+          targetGroup: 'all_users', // This is the default in schema
       });
 
       if (result.success) {
@@ -89,9 +77,9 @@ export function SmsSenderForm() {
           title: "ارسال موفق",
           description: result.message || "پیامک‌ها با موفقیت برای ارسال صف شدند.",
           variant: "default",
-           duration: 5000, // Show longer for success
+           duration: 5000,
         });
-        form.reset(); // Clear the form on success
+        form.reset();
         setCharacterCount(0);
         setSmsCount(1);
       } else {
@@ -128,7 +116,7 @@ export function SmsSenderForm() {
                   placeholder="پیام خود را اینجا بنویسید..."
                   className="min-h-[120px] resize-y"
                   {...field}
-                  onChange={handleMessageChange} // Use custom handler
+                  onChange={handleMessageChange}
                   disabled={loading}
                 />
               </FormControl>
@@ -140,13 +128,6 @@ export function SmsSenderForm() {
             </FormItem>
           )}
         />
-
-        {/* TODO: Add Target Group Selection (when implemented) */}
-        {/* <FormField ... name="targetGroup" ... /> */}
-
-        {/* TODO: Add Scheduling Options (when implemented) */}
-        {/* <FormField ... name="scheduledTime" ... /> */}
-
         <AlertDialog>
             <AlertDialogTrigger asChild>
                 <Button type="button" className="w-full" disabled={loading || !form.formState.isValid}>

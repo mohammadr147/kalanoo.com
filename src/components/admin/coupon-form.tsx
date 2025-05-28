@@ -5,7 +5,6 @@ import React, { useState } from 'react';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-// Removed: import { Timestamp } from 'firebase/firestore'; // No longer needed
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -17,37 +16,15 @@ import { Switch } from "@/components/ui/switch";
 import { CalendarIcon, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
-import { createCoupon, updateCoupon } from '@/app/actions'; // Import consolidated server actions
-import type { Coupon } from '@/types'; // Import types
-import { DialogClose } from '@/components/ui/dialog'; // Import DialogClose
+import { createCoupon, updateCoupon } from '@/app/actions';
+import type { Coupon } from '@/types';
+import { CreateCouponSchema } from '@/types'; // Import from types
+import { DialogClose } from '@/components/ui/dialog';
 
-// Validation Schema using Zod
-const couponSchema = z.object({
-  code: z.string().min(3, { message: "کد کوپن باید حداقل ۳ کاراکتر باشد." }).regex(/^[A-Z0-9]+$/, "کد کوپن فقط می‌تواند شامل حروف بزرگ انگلیسی و اعداد باشد."),
-  discount_type: z.enum(['percentage', 'fixed'], { required_error: "نوع تخفیف الزامی است." }),
-  discount_value: z.number().positive({ message: "مقدار تخفیف باید مثبت باشد." }).min(1, { message: "مقدار تخفیف الزامی است." }),
-  expiry_date: z.date({ required_error: "تاریخ انقضا الزامی است." }).min(new Date(new Date().setHours(0,0,0,0)), "تاریخ انقضا نمی‌تواند در گذشته باشد."), // Cannot be in the past
-  usage_limit: z.number().int().positive().optional().nullable(),
-  min_order_value: z.number().int().nonnegative().optional().nullable(),
-  is_active: z.boolean().default(true),
-});
-
-// Refine based on discount type
-couponSchema.refine(data => {
-    if (data.discount_type === 'percentage' && data.discount_value > 100) {
-        return false;
-    }
-    return true;
-}, {
-    message: "درصد تخفیف نمی‌تواند بیشتر از ۱۰۰ باشد.",
-    path: ["discount_value"],
-});
-
-
-type CouponFormData = z.infer<typeof couponSchema>;
+type CouponFormData = z.infer<typeof CreateCouponSchema>;
 
 interface CouponFormProps {
-  coupon?: Coupon; // Optional: Pass existing coupon for editing
+  coupon?: Coupon;
   mode?: 'create' | 'edit';
 }
 
@@ -55,7 +32,6 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
 
-   // Helper function to safely parse date string from DB to Date object
    const parseDate = (dateInput: Date | string | undefined | null): Date | undefined => {
         if (!dateInput) return undefined;
         if (dateInput instanceof Date) return dateInput;
@@ -68,12 +44,12 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
     };
 
   const form = useForm<CouponFormData>({
-    resolver: zodResolver(couponSchema),
+    resolver: zodResolver(CreateCouponSchema), // Use imported schema
     defaultValues: {
       code: coupon?.code || '',
       discount_type: coupon?.discount_type || undefined,
       discount_value: coupon?.discount_value || undefined,
-      expiry_date: parseDate(coupon?.expiry_date), // Use helper to parse date
+      expiry_date: parseDate(coupon?.expiry_date),
       usage_limit: coupon?.usage_limit || null,
       min_order_value: coupon?.min_order_value || null,
       is_active: coupon?.is_active ?? true,
@@ -85,27 +61,24 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
     try {
         const couponData = {
             ...data,
-            code: data.code.toUpperCase(), // Ensure code is uppercase
-            // expiryDate is already a Date object from the form
-            usage_limit: data.usage_limit || null, // Ensure null if empty
-            min_order_value: data.min_order_value || null, // Ensure null if empty
+            code: data.code.toUpperCase(),
+            usage_limit: data.usage_limit || null,
+            min_order_value: data.min_order_value || null,
         };
 
       let result;
       if (mode === 'edit' && coupon?.id) {
-        // result = await updateCoupon(Number(coupon.id), couponData); // TODO: Implement updateCoupon action
          toast({ title: "ویژگی ویرایش هنوز پیاده سازی نشده است.", variant: "default" });
          setLoading(false);
-         return; // Remove this return when update is implemented
+         return;
       } else {
         result = await createCoupon(couponData);
       }
 
       if (result.success) {
         toast({ title: "موفقیت", description: `کوپن ${couponData.code} با موفقیت ${mode === 'edit' ? 'ویرایش' : 'ایجاد'} شد.` });
-        form.reset(); // Reset form on success
-        // Optionally close the dialog if inside one - requires passing down a close function or using context
-         document.getElementById('close-coupon-dialog')?.click(); // Trigger DialogClose if it exists
+        form.reset();
+         document.getElementById('close-coupon-dialog')?.click();
       } else {
         toast({
           title: "خطا",
@@ -173,7 +146,7 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
                       type="number"
                       placeholder={form.getValues('discount_type') === 'percentage' ? "مثال: 20" : "مثال: 50000"}
                       {...field}
-                      onChange={event => field.onChange(+event.target.value)} // Convert to number
+                      onChange={event => field.onChange(+event.target.value)}
                       disabled={loading}
                       min="0"
                       step={form.getValues('discount_type') === 'percentage' ? "1" : "1000"}
@@ -187,7 +160,7 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
              control={form.control}
              name="expiry_date"
              render={({ field }) => (
-               <FormItem className="flex flex-col pt-2"> {/* Adjust alignment */}
+               <FormItem className="flex flex-col pt-2">
                  <FormLabel>تاریخ انقضا *</FormLabel>
                  <Popover>
                    <PopoverTrigger asChild>
@@ -201,7 +174,6 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
                          disabled={loading}
                        >
                          <CalendarIcon className="ml-2 h-4 w-4" />
-                          {/* Use standard toLocaleDateString for Farsi date format */}
                          {field.value ? field.value.toLocaleDateString('fa-IR') : <span>انتخاب تاریخ</span>}
                        </Button>
                      </FormControl>
@@ -214,7 +186,6 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
                        disabled={(date) => date < new Date(new Date().setHours(0,0,0,0)) || loading}
                        initialFocus
                        dir="rtl"
-                       // locale={{ locale: 'fa' }} // Locale needs to be configured in react-day-picker setup
                      />
                    </PopoverContent>
                  </Popover>
@@ -236,7 +207,8 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
                      type="number"
                      placeholder="مثال: 100 (خالی = نامحدود)"
                      {...field}
-                     onChange={event => field.onChange(event.target.value === '' ? null : +event.target.value)} // Handle empty string for null
+                     onChange={event => field.onChange(event.target.value === '' ? null : +event.target.value)}
+                     value={field.value ?? ''}
                      disabled={loading}
                      min="1"
                      step="1"
@@ -257,7 +229,8 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
                      type="number"
                      placeholder="مثال: 500000 (خالی = بدون حداقل)"
                      {...field}
-                     onChange={event => field.onChange(event.target.value === '' ? null : +event.target.value)} // Handle empty string for null
+                     onChange={event => field.onChange(event.target.value === '' ? null : +event.target.value)}
+                     value={field.value ?? ''}
                      disabled={loading}
                      min="0"
                      step="1000"
@@ -289,7 +262,6 @@ export function CouponForm({ coupon, mode = 'create' }: CouponFormProps) {
          />
 
         <div className="flex justify-end gap-2">
-             {/* Hidden close button to be triggered programmatically */}
              <DialogClose asChild>
                  <Button type="button" variant="outline" id="close-coupon-dialog">انصراف</Button>
              </DialogClose>

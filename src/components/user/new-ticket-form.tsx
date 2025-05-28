@@ -11,7 +11,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { createTicket, CreateTicketSchema } from '@/app/actions'; // Import schema and action
+import { createTicket } from '@/app/actions';
+import { CreateTicketSchema } from '@/types'; // Import from types
 import { useRouter } from 'next/navigation';
 
 type NewTicketFormData = z.infer<typeof CreateTicketSchema>;
@@ -43,7 +44,7 @@ export function NewTicketForm({ userId }: NewTicketFormProps) {
           description: `شناسه تیکت شما: TICKET-${String(result.ticketId).padStart(5, '0')}`,
         });
         form.reset();
-        router.push('/user/tickets'); // Redirect to tickets list
+        router.push('/user/tickets');
       } else {
         toast({
           title: "خطا در ارسال تیکت",
@@ -100,16 +101,6 @@ export function NewTicketForm({ userId }: NewTicketFormProps) {
             </FormItem>
           )}
         />
-        {/* Placeholder for file attachments in future */}
-        {/* 
-        <FormItem>
-          <FormLabel>پیوست فایل (اختیاری)</FormLabel>
-          <FormControl>
-            <Input type="file" multiple disabled={loading} />
-          </FormControl>
-          <FormDescription>می‌توانید اسکرین‌شات یا فایل‌های مرتبط را پیوست کنید.</FormDescription>
-        </FormItem> 
-        */}
         <Button type="submit" className="w-full" disabled={loading}>
           {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
           ارسال تیکت

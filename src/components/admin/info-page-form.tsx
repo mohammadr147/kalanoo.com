@@ -7,33 +7,23 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea'; // For meta description
+import { Textarea } from '@/components/ui/textarea';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { Switch } from "@/components/ui/switch";
 import { Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { createInfoPage, updateInfoPage } from '@/app/actions'; // Import relevant server actions
-import type { InfoPage } from '@/types'; // Import type
+import { createInfoPage, updateInfoPage } from '@/app/actions';
+import type { InfoPage } from '@/types';
+import { infoPageSchema } from '@/types'; // Import from types
 import { DialogClose } from '@/components/ui/dialog';
-
-// Zod Schema for the form
-const infoPageSchema = z.object({
-  title: z.string().min(3, { message: "عنوان صفحه باید حداقل ۳ کاراکتر باشد." }),
-  slug: z.string().min(3, { message: "آدرس (Slug) باید حداقل ۳ کاراکتر باشد." })
-         .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "آدرس فقط می‌تواند شامل حروف کوچک انگلیسی، اعداد و خط تیره (-) باشد و با خط تیره شروع یا تمام نشود."),
-  content: z.string().min(10, { message: "محتوای صفحه باید حداقل ۱۰ کاراکتر باشد." }), // Basic validation, consider a rich text editor
-  meta_title: z.string().max(60, { message: "عنوان متا نباید بیشتر از ۶۰ کاراکتر باشد."}).optional().or(z.literal('')),
-  meta_description: z.string().max(160, { message: "توضیحات متا نباید بیشتر از ۱۶۰ کاراکتر باشد."}).optional().or(z.literal('')),
-  is_active: z.boolean().default(true),
-});
 
 type InfoPageFormData = z.infer<typeof infoPageSchema>;
 
 interface InfoPageFormProps {
-  page?: InfoPage; // Optional: Pass existing page for editing
+  page?: InfoPage;
   mode?: 'create' | 'edit';
-  onFormSubmitSuccess?: () => void; // Optional callback for success
-  onCancel?: () => void; // Optional callback for cancel
+  onFormSubmitSuccess?: () => void;
+  onCancel?: () => void;
 }
 
 export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCancel }: InfoPageFormProps) {
@@ -45,7 +35,7 @@ export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCan
     defaultValues: {
       title: page?.title || '',
       slug: page?.slug || '',
-      content: page?.content || '', // Consider initializing rich text editor here
+      content: page?.content || '',
       meta_title: page?.meta_title || '',
       meta_description: page?.meta_description || '',
       is_active: page?.is_active ?? true,
@@ -64,11 +54,8 @@ export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCan
 
       if (result.success) {
         toast({ title: "موفقیت", description: `صفحه "${data.title}" با موفقیت ${mode === 'edit' ? 'ویرایش' : 'ایجاد'} شد.` });
-        form.reset(); // Reset form on success
-        // Trigger success callback if provided (e.g., to close dialog and refresh list)
+        form.reset();
         onFormSubmitSuccess?.();
-        // If not using callback, try programmatic close (less reliable)
-        // document.getElementById('close-page-dialog')?.click();
       } else {
         toast({
           title: "خطا",
@@ -125,7 +112,6 @@ export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCan
                 <FormItem>
                     <FormLabel>محتوای صفحه *</FormLabel>
                     <FormControl>
-                        {/* Basic Textarea - Replace with a Rich Text Editor component later */}
                         <Textarea
                             placeholder="محتوای اصلی صفحه را اینجا وارد کنید... از HTML می‌توانید استفاده کنید."
                             className="min-h-[200px]"
@@ -137,11 +123,8 @@ export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCan
                 </FormItem>
             )}
          />
-
         <hr />
-
         <h3 className="text-lg font-medium">تنظیمات سئو (اختیاری)</h3>
-
          <FormField
           control={form.control}
           name="meta_title"
@@ -149,13 +132,12 @@ export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCan
             <FormItem>
               <FormLabel>عنوان متا (برای موتورهای جستجو)</FormLabel>
               <FormControl>
-                <Input placeholder="حداکثر ۶۰ کاراکتر" {...field} disabled={loading} maxLength={60} />
+                <Input placeholder="حداکثر ۶۰ کاراکتر" {...field} value={field.value ?? ''} disabled={loading} maxLength={60} />
               </FormControl>
               <FormMessage />
             </FormItem>
           )}
         />
-
          <FormField
           control={form.control}
           name="meta_description"
@@ -166,6 +148,7 @@ export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCan
                  <Textarea
                     placeholder="خلاصه‌ای جذاب از محتوای صفحه (حداکثر ۱۶۰ کاراکتر)"
                     {...field}
+                    value={field.value ?? ''}
                     disabled={loading}
                     maxLength={160}
                     rows={3}
@@ -175,9 +158,7 @@ export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCan
             </FormItem>
           )}
         />
-
         <hr />
-
          <FormField
             control={form.control}
             name="is_active"
@@ -199,10 +180,7 @@ export function InfoPageForm({ page, mode = 'create', onFormSubmitSuccess, onCan
                 </FormItem>
             )}
          />
-
-
         <div className="flex justify-end gap-2">
-             {/* Trigger cancel callback or use DialogClose */}
              {onCancel ? (
                   <Button type="button" variant="outline" onClick={onCancel} disabled={loading}>انصراف</Button>
              ) : (

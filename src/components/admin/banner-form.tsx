@@ -14,22 +14,12 @@ import { Loader2, Upload } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { createBanner, updateBanner } from '@/app/actions';
 import type { Banner } from '@/types';
+import { BannerSchema } from '@/types'; // Import from types
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
-import { Label } from '@/components/ui/label'; // Import Label
+import { Label } from '@/components/ui/label';
 
-
-const bannerSchema = z.object({
-  title: z.string().max(100, "عنوان نباید بیشتر از ۱۰۰ کاراکتر باشد.").optional().nullable(),
-  description: z.string().max(255, "توضیحات نباید بیشتر از ۲۵۵ کاراکتر باشد.").optional().nullable(),
-  image_url: z.string().min(1, "تصویر بنر (دسکتاپ) الزامی است."), // Accepts data URI or URL
-  mobile_image_url: z.string().optional().nullable().or(z.literal('')), // Accepts data URI, URL or empty
-  link: z.string().url({ message: "لینک نامعتبر است." }).optional().nullable().or(z.literal('')),
-  order: z.coerce.number().int().min(0, { message: "ترتیب نمایش باید یک عدد صحیح و مثبت باشد." }).default(0),
-  is_active: z.boolean().default(true),
-});
-
-type BannerFormData = z.infer<typeof bannerSchema>;
+type BannerFormData = z.infer<typeof BannerSchema>;
 
 interface BannerFormProps {
   banner?: Banner;
@@ -44,14 +34,13 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(banner?.image_url || null);
   const [previewMobileImageUrl, setPreviewMobileImageUrl] = useState<string | null>(banner?.mobile_image_url || null);
 
-
   const form = useForm<BannerFormData>({
-    resolver: zodResolver(bannerSchema),
+    resolver: zodResolver(BannerSchema),
     defaultValues: {
       title: banner?.title || '',
       description: banner?.description || '',
-      image_url: banner?.image_url || '', // Will be overridden by preview if file selected
-      mobile_image_url: banner?.mobile_image_url || '', // Will be overridden by preview if file selected
+      image_url: banner?.image_url || '',
+      mobile_image_url: banner?.mobile_image_url || '',
       link: banner?.link || '',
       order: banner?.order ?? 0,
       is_active: banner?.is_active ?? true,
@@ -80,7 +69,7 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
       const reader = new FileReader();
       reader.onloadend = () => {
         const dataUri = reader.result as string;
-        form.setValue(fieldName, dataUri, { shouldValidate: true }); // Set Data URI to form value
+        form.setValue(fieldName, dataUri, { shouldValidate: true });
         if (fieldName === 'image_url') {
           setPreviewImageUrl(dataUri);
         } else {
@@ -91,13 +80,10 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
     }
   };
 
-
   const onSubmit: SubmitHandler<BannerFormData> = async (data) => {
     setLoading(true);
     try {
       let result;
-      // The data.image_url and data.mobile_image_url will now be data URIs if new files were uploaded
-      // or existing URLs if not changed. The backend action needs to handle this.
       const payload = {
         ...data,
         title: data.title || null,
@@ -129,7 +115,7 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
       setLoading(false);
     }
   };
-  
+
 
   return (
     <Form {...form}>
@@ -147,7 +133,6 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
             </FormItem>
           )}
         />
-
         <FormField
           control={form.control}
           name="description"
@@ -161,11 +146,10 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
             </FormItem>
           )}
         />
-
         <FormField
           control={form.control}
           name="image_url"
-          render={({ field: { onChange, value, ...restField } }) => ( 
+          render={({ field: { onChange, value, ...restField } }) => (
             <FormItem>
               <FormLabel>تصویر بنر (دسکتاپ) *</FormLabel>
                <Input
@@ -196,7 +180,6 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
             </FormItem>
           )}
         />
-        
         <FormField
           control={form.control}
           name="mobile_image_url"
@@ -232,8 +215,6 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
             </FormItem>
           )}
         />
-
-
         <FormField
           control={form.control}
           name="link"
@@ -247,7 +228,6 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
             </FormItem>
           )}
         />
-
         <FormField
           control={form.control}
           name="order"
@@ -262,7 +242,6 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
             </FormItem>
           )}
         />
-
         <FormField
           control={form.control}
           name="is_active"
@@ -281,7 +260,6 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
             </FormItem>
           )}
         />
-
         <div className="flex justify-end gap-2 pt-4">
           <Button type="button" variant="outline" onClick={onCancel} disabled={loading}>
             انصراف
@@ -295,6 +273,3 @@ export function BannerForm({ banner, mode, onFormSubmitSuccess, onCancel }: Bann
     </Form>
   );
 }
-
-
-    

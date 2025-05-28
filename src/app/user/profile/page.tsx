@@ -1,13 +1,13 @@
 
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense } from 'react'; // Added Suspense
 import { useForm, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+// Label is already imported in Form component
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Calendar } from "@/components/ui/calendar";
@@ -17,39 +17,34 @@ import { cn } from "@/lib/utils";
 import { useToast } from '@/hooks/use-toast';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Separator } from '@/components/ui/separator';
-import { useAuth } from '@/context/auth-context'; // Import useAuth
-// Removed: import { Timestamp } from 'firebase/firestore'; // No longer needed
-// TODO: Import server action to update profile in MySQL
-// import { updateUserProfile } from '@/app/actions';
-import type { UserProfile } from '@/types'; // Import types
-import { buttonVariants } from '@/components/ui/button'; // Import buttonVariants for styling label
+import { useAuth } from '@/context/auth-context';
+import type { UserProfile } from '@/types';
+import { UpdateUserProfileSchema } from '@/types'; // Import schema from types
+import { updateUserProfile } from '@/app/actions'; // Import server action
+import { getMonth, getDate } from 'date-fns';
 
-// Validation Schema using Zod
-const profileSchema = z.object({
-  first_name: z.string().min(2, { message: "نام باید حداقل ۲ حرف باشد." }),
-  last_name: z.string().min(2, { message: "نام خانوادگی باید حداقل ۲ حرف باشد." }),
-  national_id: z.string().regex(/^\d{10}$/, { message: "کد ملی باید ۱۰ رقم باشد." }).optional().or(z.literal('')),
-  email: z.string().email({ message: "ایمیل نامعتبر است." }).optional().or(z.literal('')),
-  birth_date: z.date().optional().nullable(), // Optional Date object for picker
-  address: z.object({
-    province: z.string().min(1, { message: "استان الزامی است." }),
-    city: z.string().min(1, { message: "شهر الزامی است." }),
-    full_address: z.string().min(10, { message: "آدرس کامل باید حداقل ۱۰ حرف باشد." }),
-    postal_code: z.string().regex(/^\d{10}$/, { message: "کد پستی باید ۱۰ رقم باشد." }),
-  }),
-  profilePicture: z.any().optional(), // Placeholder for file upload
-});
+// Use the UpdateUserProfileSchema for form validation, but adapt for client-side Date object
+const userProfilePageSchema = UpdateUserProfileSchema.extend({
+    birth_date: z.date().optional().nullable(), // Expect Date object from Calendar
+    address: z.object({ // Expect Address object
+        province: z.string().min(1, { message: "استان الزامی است." }),
+        city: z.string().min(1, { message: "شهر الزامی است." }),
+        full_address: z.string().min(10, { message: "آدرس کامل باید حداقل ۱۰ حرف باشد." }),
+        postal_code: z.string().regex(/^\d{10}$/, { message: "کد پستی باید ۱۰ رقم باشد." }),
+    }).optional().nullable(),
+    // We don't need uid in form data, it comes from auth context
+}).omit({ uid: true, profile_image_data_url: true, is_profile_complete: true, birth_month: true, birth_day: true });
 
-type ProfileFormData = z.infer<typeof profileSchema>;
+
+type UserProfilePageFormData = z.infer<typeof userProfilePageSchema>;
 
 
 export default function UserProfilePage() {
   const { toast } = useToast();
-  const { user, userData: initialUserData, loading: authLoading, checkAuthState } = useAuth(); // Get user data and check function
+  const { user, userData: initialUserData, loading: authLoading, checkAuthState } = useAuth();
   const [loading, setLoading] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
 
-   // Helper function to safely parse date string from DB to Date object
    const parseDate = (dateInput: Date | string | undefined | null): Date | undefined => {
         if (!dateInput) return undefined;
         if (dateInput instanceof Date) return dateInput;
@@ -61,7 +56,19 @@ export default function UserProfilePage() {
         }
     };
 
-    // Initialize preview image URL and form default values
+  const form = useForm<UserProfilePageFormData>({
+    resolver: zodResolver(userProfilePageSchema),
+    defaultValues: {
+      first_name: '',
+      last_name: '',
+      national_id: '',
+      email: '',
+      secondary_phone: '',
+      birth_date: undefined,
+      address: { province: '', city: '', full_address: '', postal_code: '' },
+    },
+  });
+
     useEffect(() => {
         if (initialUserData) {
              setPreviewImageUrl(initialUserData.profile_image_url || null);
@@ -70,38 +77,31 @@ export default function UserProfilePage() {
                 last_name: initialUserData.last_name || '',
                 national_id: initialUserData.national_id || '',
                 email: initialUserData.email || '',
+                secondary_phone: initialUserData.secondary_phone || '',
                 birth_date: parseDate(initialUserData.birth_date),
-                address: {
-                    province: initialUserData.address?.province || '',
-                    city: initialUserData.address?.city || '',
-                    full_address: initialUserData.address?.full_address || '',
-                    postal_code: initialUserData.address?.postal_code || '',
-                },
-                profilePicture: undefined,
+                address: initialUserData.address ? {
+                    province: initialUserData.address.province || '',
+                    city: initialUserData.address.city || '',
+                    full_address: initialUserData.address.full_address || '',
+                    postal_code: initialUserData.address.postal_code || '',
+                } : { province: '', city: '', full_address: '', postal_code: '' },
              });
         } else {
-             // Reset form if user logs out or data isn't available initially
             form.reset();
             setPreviewImageUrl(null);
         }
-   }, [initialUserData, /* form */]); // form dependency removed temporarily to avoid potential loops
-
-  const form = useForm<ProfileFormData>({
-    resolver: zodResolver(profileSchema),
-    // Default values are set in the useEffect hook now
-  });
+   }, [initialUserData, form]);
 
 
-   // Handle profile picture selection
    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (file) {
             const reader = new FileReader();
             reader.onloadend = () => {
                 setPreviewImageUrl(reader.result as string);
+                // No need to form.setValue for 'profilePicture' as it's handled by profile_image_data_url in submit
             };
             reader.readAsDataURL(file);
-            form.setValue('profilePicture', file);
         }
     };
 
@@ -112,48 +112,47 @@ export default function UserProfilePage() {
    };
 
 
-  const onSubmit: SubmitHandler<ProfileFormData> = async (data) => {
+  const onSubmit: SubmitHandler<UserProfilePageFormData> = async (data) => {
       if (!user) {
           toast({ title: "خطا", description: "شما وارد نشده‌اید.", variant: "destructive" });
           return;
       }
     setLoading(true);
-    console.log("Form Data Submitted:", data);
 
-    // --- TODO: Replace with actual API call to update user profile in MySQL ---
-    // 1. Prepare data (handle file upload if 'profilePicture' is present -> requires backend logic)
-    // 2. Send relevant fields (excluding profilePicture file) to your backend API endpoint (e.g., /api/user/profile)
-    // 3. Handle response from the API (success or error)
-
-    const profileDataToUpdate = {
+    const profileDataToUpdate: z.infer<typeof UpdateUserProfileSchema> = {
          uid: user.uid,
          first_name: data.first_name,
          last_name: data.last_name,
          national_id: data.national_id || null,
          email: data.email || null,
-         birth_date: data.birth_date ? data.birth_date.toISOString().split('T')[0] : null, // Format YYYY-MM-DD
-         address: JSON.stringify(data.address), // Send address as JSON string
-         // profile_image_url: '...' // Backend should handle upload and return URL
+         secondary_phone: data.secondary_phone || null,
+         birth_date: data.birth_date ? data.birth_date.toISOString().split('T')[0] : null,
+         birth_month: data.birth_date ? getMonth(data.birth_date) + 1 : null,
+         birth_day: data.birth_date ? getDate(data.birth_date) : null,
+         address: data.address ? JSON.stringify(data.address) : null,
+         profile_image_data_url: previewImageUrl && previewImageUrl.startsWith('data:image') ? previewImageUrl : null,
+         // is_profile_complete will be handled by server action if needed or set based on fields
     };
 
-    console.log("Data being sent to backend (excluding file):", profileDataToUpdate);
-
-    // Example simulation
-    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate network delay
-
-    // Simulate success/error
-    const isSuccess = Math.random() > 0.1; // 90% success chance
-
-    if (isSuccess) {
-      toast({ title: "موفقیت", description: "اطلاعات پروفایل شما با موفقیت به‌روز شد." });
-      await checkAuthState(); // Refresh user data in context
-    } else {
-      toast({ title: "خطا", description: "خطا در به‌روزرسانی اطلاعات. لطفاً دوباره تلاش کنید.", variant: "destructive" });
+    try {
+        const result = await updateUserProfile(profileDataToUpdate);
+        if (result.success) {
+          toast({ title: "موفقیت", description: "اطلاعات پروفایل شما با موفقیت به‌روز شد." });
+          await checkAuthState();
+          if (result.user?.profile_image_url) { // If server returned a new URL (after saving)
+            setPreviewImageUrl(result.user.profile_image_url);
+          }
+        } else {
+          toast({ title: "خطا", description: result.error || "خطا در به‌روزرسانی اطلاعات. لطفاً دوباره تلاش کنید.", variant: "destructive" });
+        }
+    } catch(e) {
+         toast({ title: "خطای پیش بینی نشده", description: "مشکلی در سرور رخ داده است.", variant: "destructive" });
+    } finally {
+        setLoading(false);
     }
-    setLoading(false);
   };
 
-   if (authLoading) {
+   if (authLoading && !initialUserData) { // Show loader only if initial data is not yet available
        return (
          <div className="flex justify-center items-center h-40">
            <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -161,7 +160,7 @@ export default function UserProfilePage() {
        );
    }
 
-    if (!user) {
+    if (!user && !authLoading) { // If auth is done loading and still no user
          return (
              <Card className="w-full max-w-4xl mx-auto">
                  <CardHeader>
@@ -185,8 +184,6 @@ export default function UserProfilePage() {
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-8">
-
-            {/* Profile Picture Section */}
              <div className="flex flex-col sm:flex-row items-center gap-6">
                 <Avatar className="h-24 w-24 border">
                     <AvatarImage src={previewImageUrl || undefined} alt="عکس پروفایل" />
@@ -194,49 +191,38 @@ export default function UserProfilePage() {
                         {getInitials(form.getValues('first_name'), form.getValues('last_name'))}
                     </AvatarFallback>
                 </Avatar>
-                <FormField
-                  control={form.control}
-                  name="profilePicture"
-                  render={({ field }) => ( // field is not directly used for file input value
-                    <FormItem className="flex-grow">
-                      <FormLabel>تغییر عکس پروفایل (نیاز به پیاده‌سازی بک‌اند)</FormLabel>
-                      <FormControl>
-                         <div className="flex items-center gap-2">
-                            <Input
-                              type="file"
-                              accept="image/png, image/jpeg, image/jpg"
-                              onChange={handleFileChange}
-                              className="hidden" // Hide default input
-                              id="profile-picture-upload"
-                              disabled={loading}
-                            />
-                            <Label
-                                htmlFor="profile-picture-upload"
-                                className={cn(
-                                    buttonVariants({ variant: "outline" }),
-                                    "cursor-pointer",
-                                    loading && "opacity-50 cursor-not-allowed"
-                                )}
-                            >
-                                <Upload className="ml-2 h-4 w-4" />
-                                انتخاب فایل
-                            </Label>
-                             {previewImageUrl && previewImageUrl !== initialUserData?.profile_image_url && (
-                                <span className="text-xs text-muted-foreground truncate max-w-xs">
-                                    عکس جدید انتخاب شد
-                                </span>
-                             )}
-                         </div>
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
+                <div className="flex-grow">
+                    <FormLabel htmlFor="profile-picture-upload">تغییر عکس پروفایل</FormLabel>
+                    <div className="flex items-center gap-2 mt-1">
+                        <Input
+                            type="file"
+                            accept="image/png, image/jpeg, image/jpg"
+                            onChange={handleFileChange}
+                            className="hidden"
+                            id="profile-picture-upload"
+                            disabled={loading}
+                        />
+                        <Label
+                            htmlFor="profile-picture-upload"
+                            className={cn(
+                                buttonVariants({ variant: "outline" }),
+                                "cursor-pointer",
+                                loading && "opacity-50 cursor-not-allowed"
+                            )}
+                        >
+                            <Upload className="ml-2 h-4 w-4" />
+                            انتخاب فایل
+                        </Label>
+                            {previewImageUrl && previewImageUrl !== initialUserData?.profile_image_url && (
+                            <span className="text-xs text-muted-foreground truncate max-w-xs">
+                                عکس جدید انتخاب شد
+                            </span>
+                            )}
+                    </div>
+                    <FormMessage />
+                </div>
             </div>
-
             <Separator />
-
-            {/* Personal Information */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                <FormItem>
                  <FormLabel>شماره موبایل (غیرقابل تغییر)</FormLabel>
@@ -251,7 +237,7 @@ export default function UserProfilePage() {
                   <FormItem>
                     <FormLabel>ایمیل (اختیاری)</FormLabel>
                     <FormControl>
-                      <Input type="email" placeholder="example@domain.com" {...field} disabled={loading} dir="ltr" className="text-left"/>
+                      <Input type="email" placeholder="example@domain.com" {...field} value={field.value || ''} disabled={loading} dir="ltr" className="text-left"/>
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -262,9 +248,9 @@ export default function UserProfilePage() {
                 name="first_name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>نام *</FormLabel>
+                    <FormLabel>نام</FormLabel>
                     <FormControl>
-                      <Input placeholder="مثال: علی" {...field} disabled={loading} />
+                      <Input placeholder="مثال: علی" {...field} value={field.value || ''} disabled={loading} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -275,9 +261,9 @@ export default function UserProfilePage() {
                 name="last_name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>نام خانوادگی *</FormLabel>
+                    <FormLabel>نام خانوادگی</FormLabel>
                     <FormControl>
-                      <Input placeholder="مثال: محمدی" {...field} disabled={loading} />
+                      <Input placeholder="مثال: محمدی" {...field} value={field.value || ''} disabled={loading} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -290,19 +276,31 @@ export default function UserProfilePage() {
                   <FormItem>
                     <FormLabel>کد ملی (اختیاری)</FormLabel>
                     <FormControl>
-                      <Input type="text" inputMode='numeric' maxLength={10} placeholder="۰۰۱۲۳۴۵۶۷۸" {...field} disabled={loading} dir="ltr" className="text-left" />
+                      <Input type="text" inputMode='numeric' maxLength={10} placeholder="۰۰۱۲۳۴۵۶۷۸" {...field} value={field.value || ''} disabled={loading} dir="ltr" className="text-left" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
-
+               <FormField
+                control={form.control}
+                name="secondary_phone"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>شماره تماس دوم (اختیاری)</FormLabel>
+                    <FormControl>
+                      <Input type="tel" placeholder="09xxxxxxxxx" {...field} value={field.value || ''} disabled={loading} dir="ltr" className="text-left" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
               <FormField
                 control={form.control}
                 name="birth_date"
                 render={({ field }) => (
-                  <FormItem className="flex flex-col pt-2"> {/* Adjusted padding for alignment */}
-                    <FormLabel>تاریخ تولد (اختیاری)</FormLabel>
+                  <FormItem className="flex flex-col pt-2">
+                    <FormLabel>تاریخ تولد</FormLabel>
                     <Popover>
                       <PopoverTrigger asChild>
                         <FormControl>
@@ -314,8 +312,7 @@ export default function UserProfilePage() {
                             )}
                             disabled={loading}
                           >
-                            <CalendarIcon className="ml-2 h-4 w-4" /> {/* Icon on the left for RTL */}
-                             {/* Use standard toLocaleDateString for Farsi date format */}
+                            <CalendarIcon className="ml-2 h-4 w-4" />
                              {field.value ? field.value.toLocaleDateString('fa-IR') : <span>انتخاب تاریخ</span>}
                           </Button>
                         </FormControl>
@@ -323,17 +320,17 @@ export default function UserProfilePage() {
                       <PopoverContent className="w-auto p-0" align="start">
                         <Calendar
                            mode="single"
-                           selected={field.value || undefined} // Pass undefined if null
+                           selected={field.value || undefined}
                            onSelect={field.onChange}
                            disabled={(date) =>
                              date > new Date() || date < new Date("1900-01-01") || loading
                            }
-                           defaultMonth={field.value || new Date(new Date().setFullYear(new Date().getFullYear() - 18))} // Default to 18 years ago
-                           captionLayout="dropdown-buttons" // Enable year/month dropdowns
-                           fromYear={1920} // Example start year
-                           toYear={new Date().getFullYear()} // Example end year
+                           defaultMonth={field.value || new Date(new Date().setFullYear(new Date().getFullYear() - 18))}
+                           captionLayout="dropdown-buttons"
+                           fromYear={1920}
+                           toYear={new Date().getFullYear()}
                            initialFocus
-                           dir="rtl" // Ensure calendar is RTL
+                           dir="rtl"
                         />
                       </PopoverContent>
                     </Popover>
@@ -342,22 +339,18 @@ export default function UserProfilePage() {
                 )}
               />
             </div>
-
             <Separator />
-
-            {/* Address Information */}
             <div className="space-y-4">
-              <h3 className="text-lg font-medium">اطلاعات آدرس *</h3>
+              <h3 className="text-lg font-medium">اطلاعات آدرس</h3>
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                    <FormField
                     control={form.control}
                     name="address.province"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>استان *</FormLabel>
+                        <FormLabel>استان</FormLabel>
                         <FormControl>
-                           {/* TODO: Replace with a Select component populated with provinces */}
-                          <Input placeholder="مثال: تهران" {...field} disabled={loading} />
+                          <Input placeholder="مثال: تهران" {...field} value={field.value || ''} disabled={loading} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -368,10 +361,9 @@ export default function UserProfilePage() {
                     name="address.city"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>شهر *</FormLabel>
+                        <FormLabel>شهر</FormLabel>
                         <FormControl>
-                           {/* TODO: Replace/Enhance with a Select component dependent on province */}
-                          <Input placeholder="مثال: تهران" {...field} disabled={loading} />
+                          <Input placeholder="مثال: تهران" {...field} value={field.value || ''} disabled={loading} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -383,9 +375,9 @@ export default function UserProfilePage() {
                 name="address.full_address"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>آدرس کامل *</FormLabel>
+                    <FormLabel>آدرس کامل</FormLabel>
                     <FormControl>
-                      <Input placeholder="خیابان، کوچه، پلاک، واحد" {...field} disabled={loading} />
+                      <Input placeholder="خیابان، کوچه، پلاک، واحد" {...field} value={field.value || ''} disabled={loading} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -396,20 +388,18 @@ export default function UserProfilePage() {
                 name="address.postal_code"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>کد پستی *</FormLabel>
+                    <FormLabel>کد پستی</FormLabel>
                     <FormControl>
-                      <Input type="text" inputMode='numeric' maxLength={10} placeholder="۱۲۳۴۵۶۷۸۹۰" {...field} disabled={loading} dir="ltr" className="text-left" />
+                      <Input type="text" inputMode='numeric' maxLength={10} placeholder="۱۲۳۴۵۶۷۸۹۰" {...field} value={field.value || ''} disabled={loading} dir="ltr" className="text-left" />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
               />
             </div>
-
              <Separator />
-
             <div className="flex justify-end">
-                <Button type="submit" disabled={loading} size="lg">
+                <Button type="submit" disabled={loading || authLoading} size="lg">
                   {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                   ذخیره تغییرات
                 </Button>

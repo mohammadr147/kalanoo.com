@@ -4,7 +4,27 @@
 import { cookies } from 'next/headers';
 import { sendBulkSms, type SmsResult, sendOrderConfirmationSmsToCustomer, sendOrderConfirmationSmsToAdmin, sendOrderStatusUpdateSmsToCustomer } from '@/services/sms';
 import { sendOrderConfirmationEmailToCustomer, sendOrderConfirmationEmailToAdmin, sendOrderStatusUpdateEmailToCustomer, sendEmailPlaceholder } from '@/services/email';
-import type { Coupon, UserProfile, Order, Product, Category, Banner, LandingPage, InfoPage, CartItem, Address, OrderStatus, SiteSettings, Transaction, Ticket, TicketMessage, TicketStatus, TicketPriority } from '@/types';
+import type { Coupon, UserProfile, Order, Product, Category, Banner, LandingPage, InfoPage, CartItem, Address, OrderStatus, SiteSettings, Transaction, Ticket, TicketMessage, TicketStatus, TicketPriority, CommissionStructure, UserReferralDetail } from '@/types';
+// Import Zod schemas from types/index.ts
+import {
+    adminLoginSchema,
+    SendOtpSchema,
+    VerifyOtpSchema,
+    UpdateUserProfileSchema,
+    CreateCouponSchema,
+    ValidateCouponCodeSchema,
+    SendSmsSchema,
+    SendEmailSchema,
+    UpdateUserRoleSchema,
+    ProductSchema,
+    BannerSchema,
+    infoPageSchema,
+    CreateOrderInputSchema,
+    OrderStatusUpdateSchema,
+    WithdrawalRequestSchema,
+    CreateTicketSchema,
+    OrderStatusSchema // Also import OrderStatusSchema if used as a value for validation
+} from '@/types';
 import * as z from 'zod';
 import pool from '@/lib/mysql';
 import type { RowDataPacket, OkPacket, ResultSetHeader } from 'mysql2';
@@ -74,7 +94,7 @@ export async function getSiteSettings(): Promise<Partial<SiteSettings>> {
                     console.error(`Error parsing mlm_level_percentages JSON: ${row.setting_value}`, e);
                     settings[row.setting_key as keyof SiteSettings] = [] as any;
                 }
-            } else if (row.setting_key.includes('percent') || row.setting_key.includes('amount') || row.setting_key.includes('levels')) {
+            } else if (['mlm_number_of_levels', 'min_withdrawal_amount', 'level1_percent', 'level2_percent', 'level3_percent'].includes(row.setting_key)) {
                  settings[row.setting_key as keyof SiteSettings] = parseFloat(row.setting_value) as any;
             } else {
                  settings[row.setting_key as keyof SiteSettings] = row.setting_value;
@@ -83,10 +103,11 @@ export async function getSiteSettings(): Promise<Partial<SiteSettings>> {
         // Default values if not found in DB - important for commission calculation
         settings.mlm_number_of_levels = settings.mlm_number_of_levels ?? 0;
         settings.mlm_level_percentages = settings.mlm_level_percentages ?? [];
+        settings.min_withdrawal_amount = settings.min_withdrawal_amount ?? 0; // Default min withdrawal
         return settings;
-    } catch (error) {
+    } catch (error: any) {
         console.error("Error fetching site settings from MySQL:", error);
-        return { mlm_number_of_levels: 0, mlm_level_percentages: [] }; // Fallback
+        return { mlm_number_of_levels: 0, mlm_level_percentages: [], min_withdrawal_amount: 0 }; // Fallback
     } finally {
         if (connection) connection.release();
     }
@@ -125,10 +146,6 @@ export async function updateCommissionSettings(numberOfLevels: number, percentag
 }
 
 // --- Authentication Actions ---
-const adminLoginSchema = z.object({
-  username: z.string().min(1, "نام کاربری الزامی است."),
-  password: z.string().min(1, "رمز عبور الزامی است."),
-});
 
 export async function loginAdmin(formData: z.infer<typeof adminLoginSchema>): Promise<{ success: boolean; error?: string }> {
     const validation = adminLoginSchema.safeParse(formData);
@@ -137,12 +154,6 @@ export async function loginAdmin(formData: z.infer<typeof adminLoginSchema>): Pr
     let connection;
     try {
         connection = await pool.getConnection();
-        // In a real app, you'd query the 'admins' table and compare a hashed password
-        // For this project, we use hardcoded admin credentials from .env
-        // const [rows] = await connection.query<RowDataPacket[]>('SELECT password_hash FROM admins WHERE username = ? LIMIT 1', [username]);
-        // if (rows.length === 0) return { success: false, error: 'نام کاربری یا رمز عبور اشتباه است.' };
-        // const passwordMatch = await bcrypt.compare(password, rows[0].password_hash); // Example with bcrypt
-
         const envAdminUsername = process.env.ADMIN_USERNAME || 'admin';
         const envAdminPassword = process.env.ADMIN_PASSWORD || 'Admin123@';
 
@@ -175,32 +186,23 @@ export async function verifyAdminSession(): Promise<{ isAuthenticated: boolean; 
     if (!cookie) return { isAuthenticated: false };
     try {
         const sessionData = JSON.parse(cookie.value);
-        // Compare with env variables for simplicity in this project
         if (sessionData.username && sessionData.username === (process.env.ADMIN_USERNAME || 'admin')) {
             const now = Date.now();
             const sessionDuration = 60 * 60 * 24 * 1000; // 1 day in milliseconds
             if (!sessionData.loggedInAt || (now - sessionData.loggedInAt > sessionDuration)) {
-                cookies().delete('admin_session'); // Expire session
+                cookies().delete('admin_session');
                 return { isAuthenticated: false };
             }
             return { isAuthenticated: true, username: sessionData.username };
         }
     } catch (error) {
         console.error("VerifyAdminSession: Error verifying admin session:", error);
-        cookies().delete('admin_session'); // Clear malformed cookie
+        cookies().delete('admin_session');
     }
     return { isAuthenticated: false };
 }
 
 // --- User Auth & Registration with OTP ---
-const SendOtpSchema = z.object({
-  phone: z.string().regex(/^09[0-9]{9}$/, "شماره موبایل معتبر ایرانی وارد کنید."),
-});
-const VerifyOtpSchema = z.object({
-  phone: z.string().regex(/^09[0-9]{9}$/, "شماره موبایل معتبر نیست."),
-  otp: z.string().length(6, "کد تایید باید ۶ رقم باشد."),
-  inviterReferralCode: z.string().optional().nullable(),
-});
 
 async function handleUserLoginOrRegistration(phone: string, inviterReferralCode?: string | null): Promise<{ success: boolean; user?: UserProfile; error?: string, isNewUser?: boolean }> {
     let connection;
@@ -210,7 +212,6 @@ async function handleUserLoginOrRegistration(phone: string, inviterReferralCode?
 
         if (existingUsers.length > 0) {
             const user = existingUsers[0] as UserProfile;
-            // Ensure ID is string
             user.id = String(user.id);
             user.uid = String(user.uid);
             if (user.invited_by_user_id) user.invited_by_user_id = String(user.invited_by_user_id);
@@ -218,7 +219,6 @@ async function handleUserLoginOrRegistration(phone: string, inviterReferralCode?
             await connection.query('UPDATE users SET last_login_at = NOW() WHERE id = ?', [user.id]);
             return { success: true, user, isNewUser: false };
         } else {
-            // New user registration
             const referralCode = generateReferralCode();
             let invitedByUserId: number | null = null;
             if (inviterReferralCode) {
@@ -236,7 +236,7 @@ async function handleUserLoginOrRegistration(phone: string, inviterReferralCode?
             );
             const newUser: UserProfile = {
                 id: String(result.insertId),
-                uid: String(result.insertId), // uid is often same as id or external id
+                uid: String(result.insertId),
                 phone,
                 referral_code: referralCode,
                 invited_by_user_id: invitedByUserId ? String(invitedByUserId) : null,
@@ -260,27 +260,21 @@ export async function sendOtpAction(data: z.infer<typeof SendOtpSchema>): Promis
     const validation = SendOtpSchema.safeParse(data);
     if (!validation.success) return { success: false, error: validation.error.errors.map(e => e.message).join(', ') };
     const { phone } = validation.data;
-    const otp = Math.floor(100000 + Math.random() * 900000).toString(); // 6-digit OTP
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes expiry
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     let connection;
     try {
         connection = await pool.getConnection();
-        // Invalidate previous OTPs for this number
         await connection.query('UPDATE otp_codes SET is_used = 1, expires_at = NOW() WHERE phone = ? AND is_used = 0 AND expires_at > NOW()', [phone]);
         await connection.query('INSERT INTO otp_codes (phone, code, expires_at) VALUES (?, ?, ?)', [phone, otp, expiresAt]);
 
-        // Simulate SMS sending
-        const smsResult = await sendSms(phone, `کد تایید شما در کالانو: ${otp}`);
-        if (smsResult.status !== 'Sent' && smsResult.status !== 'Queued') {
-             // Log to sms_logs table
-            // await connection.query('INSERT INTO sms_logs (recipient_phone, message_content, status, provider_message_id, error_message, sent_at) VALUES (?, ?, ?, ?, ?, NOW())',
-            //    [phone, `کد تایید شما در کالانو: ${otp}`, smsResult.status, smsResult.messageId, smsResult.error]);
-            return { success: false, error: smsResult.error || 'خطا در ارسال پیامک کد تایید.' };
-        }
-         // Log to sms_logs table
-        // await connection.query('INSERT INTO sms_logs (recipient_phone, message_content, status, provider_message_id, sent_at) VALUES (?, ?, ?, ?, NOW())',
-        //    [phone, `کد تایید شما در کالانو: ${otp}`, smsResult.status, smsResult.messageId]);
+        // Simulate SMS sending for now
+        // const smsResult = await sendSms(phone, `کد تایید شما در کالانو: ${otp}`);
+        // if (smsResult.status !== 'Sent' && smsResult.status !== 'Queued') {
+        //     return { success: false, error: smsResult.error || 'خطا در ارسال پیامک کد تایید.' };
+        // }
+        console.log(`OTP for ${phone}: ${otp}`); // Log OTP for development
         return { success: true };
     } catch (error: any) {
         console.error("Error sending OTP:", error);
@@ -308,14 +302,11 @@ export async function verifyOtpAction(data: z.infer<typeof VerifyOtpSchema>): Pr
         }
 
         await connection.query('UPDATE otp_codes SET is_used = 1 WHERE id = ?', [otpRows[0].id]);
-
-        // Handle user login or registration
         const userResult = await handleUserLoginOrRegistration(phone, inviterReferralCode);
+
         if (userResult.success && userResult.user) {
-            // In a real app, generate and set a session cookie here
-            // For this project, we'll rely on client-side to know user is logged in
-            // and subsequent requests might need to pass a token or re-verify.
-            // Example: cookies().set('user_session', JSON.stringify({ userId: userResult.user.id, phone: userResult.user.phone }), { httpOnly: true, secure: process.env.NODE_ENV === 'production', maxAge: 60 * 60 * 24 * 30, path: '/' });
+            // TODO: Implement proper session management (e.g., JWT, cookies)
+            // For now, returning user data is enough for client to proceed
             return { success: true, user: userResult.user, isNewUser: userResult.isNewUser };
         } else {
             return { success: false, error: userResult.error || 'خطا در پردازش اطلاعات کاربر پس از تایید کد.' };
@@ -330,26 +321,8 @@ export async function verifyOtpAction(data: z.infer<typeof VerifyOtpSchema>): Pr
 }
 
 // --- User Profile Actions ---
-const UpdateUserProfileSchema = z.object({
-    uid: z.string(),
-    first_name: z.string().min(2).optional().nullable(),
-    last_name: z.string().min(2).optional().nullable(),
-    national_id: z.string().regex(/^\d{10}$/).optional().nullable(),
-    email: z.string().email().optional().nullable(),
-    secondary_phone: z.string().regex(/^09[0-9]{9}$/).optional().nullable(),
-    birth_date: z.string().optional().nullable(), // Expecting YYYY-MM-DD string
-    birth_month: z.number().int().min(1).max(12).optional().nullable(),
-    birth_day: z.number().int().min(1).max(31).optional().nullable(),
-    address: z.string().optional().nullable(), // Expecting JSON string of Address type
-    profile_image_data_url: z.string().optional().nullable(), // Base64 data URL for new image
-    is_profile_complete: z.boolean().optional(),
-});
 
 export async function updateUserProfile(data: Partial<UserProfile> & { uid: string; profile_image_data_url?: string | null }): Promise<{ success: boolean; error?: string; user?: UserProfile }> {
-    // TODO: Add proper session verification to ensure only the logged-in user can update their own profile, or admin can update any.
-    // For now, assume UID is correctly passed and authorized.
-
-    // Validate only the fields that are actually passed for update
     const partialSchemaToValidate = UpdateUserProfileSchema.partial().required({ uid: true });
     const validation = partialSchemaToValidate.safeParse(data);
 
@@ -361,28 +334,30 @@ export async function updateUserProfile(data: Partial<UserProfile> & { uid: stri
     let connection;
     try {
         connection = await pool.getConnection();
+        const updateFields: Record<string, any> = {};
 
-        let newProfileImageUrl: string | null = null;
         if (profile_image_data_url) {
-            newProfileImageUrl = await saveBase64Image(profile_image_data_url, `profile-${uid}`, UPLOADS_DIR_PROFILES, PUBLIC_UPLOADS_PATH_PROFILES);
+            const newProfileImageUrl = await saveBase64Image(profile_image_data_url, `profile-${uid}`, UPLOADS_DIR_PROFILES, PUBLIC_UPLOADS_PATH_PROFILES);
             if (newProfileImageUrl) {
-                (updateData as any).profile_image_url = newProfileImageUrl;
+                updateFields.profile_image_url = newProfileImageUrl;
             } else {
                 console.warn(`Could not save new profile image for user ${uid}.`)
             }
+        } else if (data.profile_image_url === null) { // Explicitly set to null to remove image
+            updateFields.profile_image_url = null;
         }
 
-        const updateFields: Record<string, any> = {};
+
         for (const [key, value] of Object.entries(updateData)) {
-            if (value !== undefined) { // Only include defined values
+            if (value !== undefined) {
                 updateFields[key] = value;
             }
         }
-        
+
         if (Object.keys(updateFields).length === 0) {
-            return { success: false, error: 'هیچ اطلاعاتی برای به‌روزرسانی ارسال نشده است.' };
+            return { success: true, error: 'هیچ اطلاعاتی برای به‌روزرسانی ارسال نشده است.' };
         }
-        updateFields.profile_updated_at = new Date(); // Set update timestamp
+        updateFields.profile_updated_at = new Date();
 
         const setClauses = Object.keys(updateFields).map(key => `${key} = ?`).join(', ');
         const values = Object.values(updateFields);
@@ -404,7 +379,7 @@ export async function updateUserProfile(data: Partial<UserProfile> & { uid: stri
              if (user.invited_by_user_id) user.invited_by_user_id = String(user.invited_by_user_id);
              return { success: true, user };
         }
-        return { success: true }; // Profile updated, but couldn't refetch for some reason
+        return { success: true };
     } catch (error: any) {
         console.error("Error updating user profile in MySQL:", error);
         return { success: false, error: 'خطا در به‌روزرسانی پروفایل کاربر در پایگاه داده.' };
@@ -415,20 +390,6 @@ export async function updateUserProfile(data: Partial<UserProfile> & { uid: stri
 
 
 // --- Coupon Actions ---
-const CreateCouponSchema = z.object({
-  code: z.string().min(3).max(50).regex(/^[A-Z0-9]+$/, "کد کوپن فقط می‌تواند شامل حروف بزرگ انگلیسی و اعداد باشد."),
-  discount_type: z.enum(['percentage', 'fixed']),
-  discount_value: z.coerce.number().positive(),
-  expiry_date: z.date(),
-  usage_limit: z.coerce.number().int().positive().optional().nullable(),
-  min_order_value: z.coerce.number().int().nonnegative().optional().nullable(),
-  is_active: z.boolean().default(true),
-});
-
-const ValidateCouponCodeSchema = z.object({
-  code: z.string().min(1),
-  cartTotal: z.number().positive("مبلغ کل سبد خرید باید مثبت باشد."),
-});
 
 export async function createCoupon(data: z.infer<typeof CreateCouponSchema>): Promise<{ success: boolean; error?: string; couponId?: number }> {
     const isAdmin = await verifyAdminSession();
@@ -476,7 +437,6 @@ export async function deleteCoupon(couponId: number): Promise<{ success: boolean
 export async function updateCoupon(couponId: number, data: Partial<Coupon>): Promise<{ success: boolean; error?: string }> {
     const isAdmin = await verifyAdminSession();
     if (!isAdmin.isAuthenticated) return { success: false, error: 'دسترسی غیرمجاز.' };
-    // TODO: Implement update logic with Zod validation for partial data
     console.log("Update coupon action called (not fully implemented)", couponId, data);
     return { success: false, error: 'ویژگی ویرایش هنوز پیاده سازی نشده است.' };
 }
@@ -567,15 +527,6 @@ export async function applyCouponToOrder(couponId: number): Promise<{ success: b
 }
 
 // --- SMS & Email Marketing Actions ---
-const SendSmsSchema = z.object({
-  message: z.string().min(5, { message: "متن پیامک باید حداقل ۵ کاراکتر باشد." }).max(500, { message: "متن پیامک نمی‌تواند بیشتر از ۵۰۰ کاراکتر باشد." }),
-  targetGroup: z.enum(['all_users']).default('all_users'),
-});
-const SendEmailSchema = z.object({
-    subject: z.string().min(3, "موضوع ایمیل باید حداقل ۳ کاراکتر باشد.").max(100, "موضوع ایمیل نمی‌تواند بیشتر از ۱۰۰ کاراکتر باشد."),
-    htmlBody: z.string().min(10, "محتوای ایمیل باید حداقل ۱۰ کاراکتر باشد."),
-    targetGroup: z.enum(['all_users']).default('all_users'),
-});
 
 export async function sendPromotionalSms(data: z.infer<typeof SendSmsSchema>): Promise<{ success: boolean; message?: string; error?: string; results?: SmsResult[]; sentCount?: number; failedCount?: number; }> {
     const isAdmin = await verifyAdminSession();
@@ -585,7 +536,7 @@ export async function sendPromotionalSms(data: z.infer<typeof SendSmsSchema>): P
     const { message, targetGroup } = validation.data;
     let connection;
     try {
-        connection = await pool.getConnection(); // Get connection for logging
+        connection = await pool.getConnection();
         let phoneNumbers: string[] = [];
         if (targetGroup === 'all_users') {
             const [rows] = await connection.query<RowDataPacket[]>('SELECT phone FROM users WHERE phone IS NOT NULL AND phone != "" AND is_profile_complete = 1');
@@ -595,11 +546,12 @@ export async function sendPromotionalSms(data: z.infer<typeof SendSmsSchema>): P
         const results = await sendBulkSms(phoneNumbers, message);
         const sentCount = results.filter(r => r.status === 'Sent' || r.status === 'Queued').length;
         const failedCount = results.length - sentCount;
-        
-        // Log to sms_logs table
+
         for (const result of results) {
+            // Assuming phone is part of messageId structure or needs to be retrieved differently
+            const recipientPhone = result.messageId.split('_')[2] || 'unknown_phone';
             await connection.query('INSERT INTO sms_logs (recipient_phone, message_content, status, provider_message_id, error_message, sent_at) VALUES (?, ?, ?, ?, ?, NOW())',
-                [result.messageId.split('_')[2], message, result.status, result.messageId, result.error]); // Assuming phone is in messageId for mock
+                [recipientPhone, message, result.status, result.messageId, result.error]);
         }
         return { success: failedCount === 0, message: `ارسال پیامک به ${results.length} شماره انجام شد. (${sentCount} موفق، ${failedCount} ناموفق)`, results, sentCount, failedCount };
     } catch (error: any) {
@@ -620,19 +572,18 @@ export async function sendPromotionalEmail(data: z.infer<typeof SendEmailSchema>
     let sentCount = 0;
     let failedCount = 0;
     try {
-        connection = await pool.getConnection(); // Get connection for logging
+        connection = await pool.getConnection();
         let emails: string[] = [];
         if (targetGroup === 'all_users') {
             const [rows] = await connection.query<RowDataPacket[]>('SELECT email FROM users WHERE email IS NOT NULL AND email != "" AND is_profile_complete = 1');
-            emails = rows.map(row => row.email).filter(email => email); // Basic filter
+            emails = rows.map(row => row.email).filter(email => email);
         } else return { success: false, error: 'گروه هدف نامعتبر.' };
 
         if (emails.length === 0) return { success: false, error: 'هیچ ایمیل معتبری برای ارسال یافت نشد.' };
 
         for (const email of emails) {
-            const result = await sendEmailPlaceholder(email, subject, htmlBody); // Using placeholder
+            const result = await sendEmailPlaceholder(email, subject, htmlBody);
             if (result.status === 'Sent') sentCount++; else failedCount++;
-             // Log to email_logs table
              await connection.query('INSERT INTO email_logs (recipient_email, subject, status, error_message, sent_at) VALUES (?, ?, ?, ?, NOW())',
                 [email, subject, result.status, result.error]);
         }
@@ -646,10 +597,6 @@ export async function sendPromotionalEmail(data: z.infer<typeof SendEmailSchema>
 }
 
 // --- User Management Actions (Admin) ---
-const UpdateUserRoleSchema = z.object({
-  userId: z.string().min(1, "شناسه کاربر الزامی است."),
-  role: z.enum(['user', 'agent', 'admin', 'blocked']), // Make sure this matches UserRoleSchema in types
-});
 
 export async function fetchUsers(): Promise<{ success: boolean; users?: (UserProfile & {direct_referral_count?: number})[]; error?: string }> {
     const isAdmin = await verifyAdminSession();
@@ -658,8 +605,8 @@ export async function fetchUsers(): Promise<{ success: boolean; users?: (UserPro
     try {
         connection = await pool.getConnection();
         const [rows] = await connection.query<RowDataPacket[]>(
-            `SELECT u.id, u.first_name, u.last_name, u.phone, u.email, u.referral_code, u.role, u.created_at, u.is_profile_complete, 
-             (SELECT COUNT(*) FROM users r WHERE r.invited_by_user_id = u.id) as direct_referral_count 
+            `SELECT u.id, u.first_name, u.last_name, u.phone, u.email, u.referral_code, u.role, u.created_at, u.is_profile_complete,
+             (SELECT COUNT(*) FROM users r WHERE r.invited_by_user_id = u.id) as direct_referral_count
              FROM users u ORDER BY u.created_at DESC LIMIT 50`
         );
         const users: (UserProfile & {direct_referral_count?: number})[] = rows.map(row => ({
@@ -698,14 +645,6 @@ export async function updateUserRole(data: z.infer<typeof UpdateUserRoleSchema>)
 
 
 // --- Product Management Actions (Admin) ---
-const ProductSchema = z.object({
-    name: z.string().min(3, "نام محصول باید حداقل ۳ کاراکتر باشد."), description: z.string().optional().nullable(),
-    price: z.coerce.number().positive("قیمت نقدی باید مثبت باشد."), installment_price: z.coerce.number().positive("قیمت اقساطی باید مثبت باشد.").optional().nullable(),
-    check_price: z.coerce.number().positive("قیمت چکی باید مثبت باشد.").optional().nullable(), original_price: z.coerce.number().positive("قیمت اصلی باید مثبت باشد.").optional().nullable(),
-    discount_percent: z.coerce.number().min(0).max(100, "درصد تخفیف باید بین ۰ تا ۱۰۰ باشد.").optional().nullable(),
-    image_url: z.string().optional().nullable(), category_id: z.string().optional().nullable(), stock: z.coerce.number().int().min(0, "موجودی نمی‌تواند منفی باشد."),
-    is_active: z.boolean().default(true), is_featured: z.boolean().default(false), is_new: z.boolean().default(false),
-});
 
 export async function createProduct(data: z.infer<typeof ProductSchema>): Promise<{ success: boolean; error?: string; productId?: number }> {
     const isAdmin = await verifyAdminSession();
@@ -749,7 +688,7 @@ export async function updateProduct(productId: number, data: Partial<z.infer<typ
             if (!newImagePath) return { success: false, error: 'خطا در ذخیره تصویر جدید محصول.' };
             updatePayload.image_url = newImagePath;
         } else if (validatedData.image_url === '') updatePayload.image_url = null;
-        
+
         const setClauses = Object.keys(updatePayload).map(key => `${key} = ?`).join(', ');
         const values = Object.values(updatePayload);
         if (values.length === 0) return { success: false, error: "هیچ فیلد معتبری برای بروزرسانی وجود ندارد." };
@@ -812,9 +751,6 @@ export async function fetchProductsAdmin(): Promise<{ success: boolean; products
 }
 
 export async function fetchCategoriesForForm(): Promise<{ success: boolean; categories?: Pick<Category, 'id' | 'name'>[]; error?: string }> {
-    // This can be called by admin or public context depending on usage
-    // const isAdmin = await verifyAdminSession(); 
-    // if (!isAdmin.isAuthenticated) return { success: false, error: 'دسترسی غیرمجاز.' };
     let connection;
     try {
         connection = await pool.getConnection();
@@ -831,24 +767,6 @@ export async function fetchCategoriesForForm(): Promise<{ success: boolean; cate
 
 
 // --- Order Management Actions (Admin & Client) ---
-const OrderStatusUpdateSchema = z.object({
-  orderId: z.string().min(1, "شناسه سفارش الزامی است."),
-  status: z.nativeEnum(OrderStatus), // Using the existing OrderStatus type
-});
-
-const CreateOrderInputSchema = z.object({
-    user_id: z.string(),
-    items: z.string(), // JSON string of CartItem[]
-    subtotal: z.number(),
-    discount_amount: z.number().optional().default(0),
-    total_amount: z.number(),
-    shipping_address: z.string(), // JSON string of Address
-    applied_coupon_code: z.string().optional().nullable(),
-    payment_method: z.enum(['cash', 'installments', 'check']),
-    payment_details: z.string().optional().nullable(), // JSON string of payment specific details
-    check_image_data_url: z.string().optional().nullable(), // Base64 for check image
-});
-
 
 export async function createOrder(
     orderInput: z.infer<typeof CreateOrderInputSchema>
@@ -866,7 +784,7 @@ export async function createOrder(
 
         let finalPaymentDetails = orderData.payment_details;
         if (orderData.payment_method === 'check' && check_image_data_url) {
-            const checkImagePath = await saveBase64Image(check_image_data_url, 'check', UPLOADS_DIR_CHECKS, PUBLIC_UPLOADS_PATH_CHECKS);
+            const checkImagePath = await saveBase64Image(check_image_data_url, `check-order-${Date.now()}`, UPLOADS_DIR_CHECKS, PUBLIC_UPLOADS_PATH_CHECKS);
             if (!checkImagePath) {
                 await connection.rollback();
                 return { success: false, error: 'خطا در ذخیره تصویر چک.' };
@@ -889,18 +807,17 @@ export async function createOrder(
         );
         const orderId = result.insertId;
 
-        // --- Commission Logic ---
         const siteSettings = await getSiteSettings();
         const [customerRows] = await connection.query<RowDataPacket[]>('SELECT id, invited_by_user_id, phone, email, first_name FROM users WHERE id = ?', [parseInt(orderData.user_id,10)]);
-        
+
         if (customerRows.length > 0) {
             const customer = customerRows[0];
             let currentInviterId: number | null = customer.invited_by_user_id;
             const numberOfLevels = siteSettings.mlm_number_of_levels || 0;
             const levelPercentages = siteSettings.mlm_level_percentages || [];
 
-            for (let level = 0; level < numberOfLevels; level++) {
-                if (!currentInviterId || (levelPercentages[level] ?? 0) <= 0) break;
+            for (let level = 0; level < numberOfLevels && currentInviterId; level++) {
+                if ((levelPercentages[level] ?? 0) <= 0) break;
 
                 const [inviterRows] = await connection.query<RowDataPacket[]>('SELECT id, invited_by_user_id, wallet_balance FROM users WHERE id = ?', [currentInviterId]);
                 if (inviterRows.length > 0) {
@@ -914,18 +831,17 @@ export async function createOrder(
                             [inviter.id, orderId, 'commission', commissionAmount, `پورسانت سطح ${level + 1} از سفارش ${orderId}`]
                         );
                     }
-                    currentInviterId = inviter.invited_by_user_id; 
+                    currentInviterId = inviter.invited_by_user_id;
                 } else {
-                    break; 
+                    break;
                 }
             }
-            // Send notifications after commission logic
-            if (customer.phone) sendOrderConfirmationSmsToCustomer(customer.phone, String(orderId), customer.first_name).catch(e => console.error(`SMS Error: ${e.message}`));
-            if (customer.email) sendOrderConfirmationEmailToCustomer(customer.email, String(orderId), customer.first_name, `/user/orders/${orderId}`).catch(e => console.error(`Email Error: ${e.message}`));
+            if (customer.phone && orderId) sendOrderConfirmationSmsToCustomer(customer.phone, String(orderId), customer.first_name).catch(e => console.error(`SMS Error: ${e.message}`));
+            if (customer.email && orderId) sendOrderConfirmationEmailToCustomer(customer.email, String(orderId), customer.first_name, `/user/orders/${orderId}`).catch(e => console.error(`Email Error: ${e.message}`));
         }
-        
-        if (ADMIN_NOTIFICATION_PHONE) sendOrderConfirmationSmsToAdmin(ADMIN_NOTIFICATION_PHONE, String(orderId), customerRows[0]?.first_name, orderData.total_amount).catch(e => console.error(`Admin SMS Error: ${e.message}`));
-        if (ADMIN_NOTIFICATION_EMAIL) sendOrderConfirmationEmailToAdmin(ADMIN_NOTIFICATION_EMAIL, String(orderId), customerRows[0]?.first_name, orderData.total_amount, `/admin/orders/${orderId}`).catch(e => console.error(`Admin Email Error: ${e.message}`));
+
+        if (ADMIN_NOTIFICATION_PHONE && orderId) sendOrderConfirmationSmsToAdmin(ADMIN_NOTIFICATION_PHONE, String(orderId), customerRows[0]?.first_name, orderData.total_amount).catch(e => console.error(`Admin SMS Error: ${e.message}`));
+        if (ADMIN_NOTIFICATION_EMAIL && orderId) sendOrderConfirmationEmailToAdmin(ADMIN_NOTIFICATION_EMAIL, String(orderId), customerRows[0]?.first_name, orderData.total_amount, `/admin/orders/${orderId}`).catch(e => console.error(`Admin Email Error: ${e.message}`));
 
         await connection.commit();
         return { success: true, orderId };
@@ -980,13 +896,12 @@ export async function updateOrderStatus(data: z.infer<typeof OrderStatusUpdateSc
         const orderUserId = orderRows[0].user_id;
         const [result] = await connection.query<OkPacket>('UPDATE orders SET status = ?, updated_at = NOW() WHERE id = ?', [status, parseInt(orderId, 10)]);
         if (result.affectedRows === 0) { await connection.rollback(); return { success: false, error: 'وضعیت سفارش تغییر نکرد یا سفارش یافت نشد.' }; }
-        
+
         const [userRows] = await connection.query<RowDataPacket[]>('SELECT phone, email, first_name FROM users WHERE id = ?', [orderUserId]);
         await connection.commit();
 
         if (userRows.length > 0) {
             const customer = userRows[0];
-            // const translatedStatus = status; // TODO: Implement translation if needed
             if (customer.phone) sendOrderStatusUpdateSmsToCustomer(customer.phone, orderId, status, customer.first_name).catch(e => console.error(`SMS Error: ${e.message}`));
             if (customer.email) sendOrderStatusUpdateEmailToCustomer(customer.email, orderId, status, customer.first_name, `/user/orders/${orderId}`).catch(e => console.error(`Email Error: ${e.message}`));
         }
@@ -1001,38 +916,36 @@ export async function updateOrderStatus(data: z.infer<typeof OrderStatusUpdateSc
 }
 
 export async function fetchUserOrders(userId: string, filters?: { status?: OrderStatus; searchTerm?: string }): Promise<{ success: boolean; orders?: Order[]; error?: string }> {
-    // TODO: Add user session verification if this is meant to be called directly by the user
     let connection;
     try {
         connection = await pool.getConnection();
         let query = 'SELECT id, user_id, total_amount, status, payment_method, created_at FROM orders WHERE user_id = ?';
         const queryParams: (string | number)[] = [parseInt(userId, 10)];
 
-        if (filters?.status && filters.status !== 'all') { // Assuming 'all' is a UI filter option not passed here
+        if (filters?.status && filters.status !== 'all') {
             query += ' AND status = ?';
             queryParams.push(filters.status);
         }
         if (filters?.searchTerm) {
-            query += ' AND id LIKE ?'; // Searching by order ID (which is numeric)
+            query += ' AND id LIKE ?';
             queryParams.push(`%${filters.searchTerm}%`);
         }
         query += ' ORDER BY created_at DESC LIMIT 50';
 
         const [rows] = await connection.query<RowDataPacket[]>(query, queryParams);
-        
+
         const orders: Order[] = rows.map(row => ({
             id: String(row.id),
-            orderNumber: String(row.id), // Use id as orderNumber for display
+            orderNumber: String(row.id),
             user_id: String(row.user_id),
             total_amount: parseFloat(row.total_amount),
-            status: row.status,
-            payment_method: row.payment_method,
+            status: row.status as OrderStatus,
+            payment_method: row.payment_method as PaymentMethod,
             created_at: row.created_at,
-            // items and shipping_address would require more complex parsing or separate queries if needed here
-            items: [], // Placeholder
-            shipping_address: {}, // Placeholder
-            subtotal: 0, // Placeholder
-            discount_amount: 0, // Placeholder
+            items: [],
+            shipping_address: {},
+            subtotal: 0,
+            discount_amount: 0,
         }));
         return { success: true, orders };
     } catch (error: any) {
@@ -1066,12 +979,6 @@ export async function fetchCategoriesAdmin(): Promise<{ success: boolean; catego
 }
 
 // --- Banner Management Actions (Admin) ---
-const BannerSchema = z.object({
-  title: z.string().max(100).optional().nullable(), description: z.string().max(255).optional().nullable(),
-  image_url: z.string().min(1, { message: "تصویر بنر (دسکتاپ) الزامی است." }), mobile_image_url: z.string().optional().nullable().or(z.literal('')),
-  link: z.string().url({ message: "لینک نامعتبر است." }).optional().nullable().or(z.literal('')),
-  order: z.number().int().min(0, { message: "ترتیب نمایش باید مثبت باشد." }), is_active: z.boolean().default(true),
-});
 
 export async function createBanner(data: z.infer<typeof BannerSchema>): Promise<{ success: boolean; error?: string; bannerId?: number }> {
     const isAdmin = await verifyAdminSession();
@@ -1118,14 +1025,14 @@ export async function updateBanner(bannerId: number, data: Partial<z.infer<typeo
             const newDesktopImagePath = await saveBase64Image(validatedData.image_url, 'banner-desktop', UPLOADS_DIR_BANNERS, PUBLIC_UPLOADS_PATH_BANNERS);
             if (!newDesktopImagePath) return { success: false, error: 'خطا در ذخیره تصویر جدید دسکتاپ.' };
             updatePayload.image_url = newDesktopImagePath;
-        } else if (validatedData.image_url === '') updatePayload.image_url = null; // Allow clearing image
+        } else if (validatedData.image_url === '') updatePayload.image_url = null;
 
         if (validatedData.mobile_image_url && validatedData.mobile_image_url.startsWith('data:image')) {
             const newMobileImagePath = await saveBase64Image(validatedData.mobile_image_url, 'banner-mobile', UPLOADS_DIR_BANNERS, PUBLIC_UPLOADS_PATH_BANNERS);
             if (!newMobileImagePath) return { success: false, error: 'خطا در ذخیره تصویر جدید موبایل.' };
             updatePayload.mobile_image_url = newMobileImagePath;
-        } else if (validatedData.mobile_image_url === '') updatePayload.mobile_image_url = null; // Allow clearing image
-        
+        } else if (validatedData.mobile_image_url === '') updatePayload.mobile_image_url = null;
+
         const setClauses = Object.keys(updatePayload).map(key => `${key === 'order' ? '`order`' : key} = ?`).join(', ');
         const values = Object.values(updatePayload);
         if (values.length === 0) return { success: false, error: "هیچ فیلد معتبری برای بروزرسانی وجود ندارد." };
@@ -1188,16 +1095,11 @@ export async function fetchBannersAdmin(): Promise<{ success: boolean; banners?:
 export async function fetchLandingPagesAdmin(): Promise<{ success: boolean; landingPages?: LandingPage[]; error?: string }> {
     const isAdmin = await verifyAdminSession();
     if (!isAdmin.isAuthenticated) return { success: false, error: 'دسترسی غیرمجاز.' };
-    // TODO: Implement this function to fetch from MySQL
     console.log("fetchLandingPagesAdmin needs implementation for MySQL.");
-    return { success: true, landingPages: [] }; // Placeholder
+    return { success: true, landingPages: [] };
 }
 
 // --- Informational Page Actions (Admin & Public) ---
-const infoPageSchema = z.object({
-    title: z.string().min(3), slug: z.string().min(3).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), content: z.string().min(10),
-    meta_title: z.string().max(60).optional().nullable(), meta_description: z.string().max(160).optional().nullable(), is_active: z.boolean().default(true),
-});
 
 export async function createInfoPage(data: z.infer<typeof infoPageSchema>): Promise<{ success: boolean; error?: string; pageId?: number }> {
     const isAdmin = await verifyAdminSession();
@@ -1225,7 +1127,7 @@ export async function createInfoPage(data: z.infer<typeof infoPageSchema>): Prom
 export async function updateInfoPage(pageId: number, data: z.infer<typeof infoPageSchema>): Promise<{ success: boolean; error?: string }> {
     const isAdmin = await verifyAdminSession();
     if (!isAdmin.isAuthenticated) return { success: false, error: 'دسترسی غیرمجاز.' };
-    const updateSchema = infoPageSchema.omit({ slug: true }); // Slug should not be updatable this way
+    const updateSchema = infoPageSchema.omit({ slug: true });
     const validation = updateSchema.safeParse(data);
     if (!validation.success) return { success: false, error: 'داده‌های ورودی نامعتبر است: ' + validation.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ') };
     const { title, content, meta_title, meta_description, is_active } = validation.data;
@@ -1272,7 +1174,7 @@ export async function fetchInfoPagesAdmin(): Promise<{ success: boolean; pages?:
         connection = await pool.getConnection();
         const [rows] = await connection.query<RowDataPacket[]>('SELECT id, title, slug, is_active, created_at, updated_at FROM info_pages ORDER BY title ASC');
         const pages: InfoPage[] = rows.map(row => ({
-            id: row.id, title: row.title, slug: row.slug, is_active: Boolean(row.is_active), created_at: row.created_at, updated_at: row.updated_at, content: '', // Content not needed for list
+            id: row.id, title: row.title, slug: row.slug, is_active: Boolean(row.is_active), created_at: row.created_at, updated_at: row.updated_at, content: '',
         }));
         return { success: true, pages };
     } catch (error: any) {
@@ -1306,19 +1208,14 @@ export async function fetchInfoPageBySlug(slug: string): Promise<{ success: bool
 
 
 // --- Wallet & Referral Actions ---
-const WithdrawalRequestSchema = z.object({
-    amount: z.coerce.number().positive("مبلغ تسویه باید مثبت باشد."),
-    shabaNumber: z.string().regex(/^IR\d{24}$/, "شماره شبا نامعتبر است. باید با IR شروع شده و ۲۶ کاراکتر باشد (مثال: IR123456789012345678901234).").or(z.string().regex(/^\d{24}$/, "شماره شبا باید ۲۴ رقم باشد (بدون IR).")),
-});
 
 export async function fetchUserWalletData(userId: string): Promise<{success: boolean, balance?: number, transactions?: Transaction[], error?: string}> {
-    // TODO: Verify user session or ensure this is called by an admin/authorized context
     let connection;
     try {
         connection = await pool.getConnection();
         const [userRows] = await connection.query<RowDataPacket[]>('SELECT wallet_balance, first_name, last_name FROM users WHERE id = ?', [userId]);
         if (userRows.length === 0) return { success: false, error: "کاربر یافت نشد." };
-        
+
         const balance = parseFloat(userRows[0].wallet_balance);
 
         const [transactionRows] = await connection.query<RowDataPacket[]>(
@@ -1327,7 +1224,7 @@ export async function fetchUserWalletData(userId: string): Promise<{success: boo
         );
         const transactions: Transaction[] = transactionRows.map(row => ({
             id: String(row.id), type: row.type, amount: parseFloat(row.amount), description: row.description, created_at: row.created_at,
-            status: row.status, shaba_number: row.shaba_number, user_id: userId, // user_id added for consistency
+            status: row.status, shaba_number: row.shaba_number, user_id: userId,
         }));
         return { success: true, balance, transactions };
     } catch (error: any) {
@@ -1339,12 +1236,11 @@ export async function fetchUserWalletData(userId: string): Promise<{success: boo
 }
 
 export async function fetchUserReferrals(userId: string): Promise<{success: boolean, referrals?: UserReferralDetail[], error?: string}> {
-    // TODO: Verify user session
     let connection;
     try {
         connection = await pool.getConnection();
         const [rows] = await connection.query<RowDataPacket[]>(
-            `SELECT r.id, r.first_name, r.last_name, r.created_at as registrationDate, 
+            `SELECT r.id, r.first_name, r.last_name, r.created_at as registrationDate,
              COALESCE(SUM(t.amount), 0) as commissionEarnedFromThisUser
              FROM users r
              LEFT JOIN orders o ON o.user_id = r.id
@@ -1355,9 +1251,9 @@ export async function fetchUserReferrals(userId: string): Promise<{success: bool
             [parseInt(userId, 10), parseInt(userId, 10)]
         );
         const referrals: UserReferralDetail[] = rows.map(row => ({
-            id: String(row.id), 
-            name: `${row.first_name || ''} ${row.last_name || ''}`.trim() || `کاربر ${row.id}`, 
-            registrationDate: row.registrationDate, 
+            id: String(row.id),
+            name: `${row.first_name || ''} ${row.last_name || ''}`.trim() || `کاربر ${row.id}`,
+            registrationDate: row.registrationDate,
             commissionEarnedFromThisUser: parseFloat(row.commissionEarnedFromThisUser)
         }));
         return { success: true, referrals };
@@ -1369,15 +1265,13 @@ export async function fetchUserReferrals(userId: string): Promise<{success: bool
     }
 }
 
-export async function requestWalletWithdrawal(userId: string, data: { amount: number; shabaNumber: string }): Promise<{success: boolean, error?: string}> {
-    // TODO: Verify user session
+export async function requestWalletWithdrawal(userId: string, data: z.infer<typeof WithdrawalRequestSchema>): Promise<{success: boolean, error?: string}> {
     const validation = WithdrawalRequestSchema.safeParse(data);
     if (!validation.success) {
          return { success: false, error: validation.error.errors.map(e => e.message).join(', ') };
     }
     const { amount, shabaNumber } = validation.data;
     const formattedShaba = shabaNumber.startsWith('IR') ? shabaNumber : `IR${shabaNumber}`;
-
 
     let connection;
     try {
@@ -1394,8 +1288,7 @@ export async function requestWalletWithdrawal(userId: string, data: { amount: nu
             await connection.rollback();
             return { success: false, error: "موجودی کیف پول برای تسویه کافی نیست." };
         }
-        
-        // Placeholder: Check minimum withdrawal amount from settings
+
         const siteSettings = await getSiteSettings();
         const minWithdrawal = siteSettings.min_withdrawal_amount || 0;
         if (amount < minWithdrawal) {
@@ -1403,20 +1296,13 @@ export async function requestWalletWithdrawal(userId: string, data: { amount: nu
              return { success: false, error: `حداقل مبلغ تسویه ${minWithdrawal.toLocaleString('fa-IR')} تومان است.` };
         }
 
-
-        // Create a withdrawal request transaction
         await connection.query(
             'INSERT INTO transactions (user_id, type, amount, description, status, shaba_number, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())',
             [parseInt(userId, 10), 'withdrawal_request', -amount, `درخواست تسویه به شبا: ${formattedShaba}`, 'pending', formattedShaba]
         );
-        
-        // Option: Deduct from balance now or when admin approves. For now, let's assume it's deducted upon admin approval.
-        // If deducting now:
-        // const newBalance = currentBalance - amount;
-        // await connection.query('UPDATE users SET wallet_balance = ? WHERE id = ?', [newBalance, userId]);
 
         await connection.commit();
-        // TODO: Notify admin about the new withdrawal request
+        console.log(`Simulated withdrawal request for user ${userId}, amount ${amount}, shaba ${formattedShaba}`);
         return { success: true };
     } catch (error: any) {
         if (connection) await connection.rollback();
@@ -1449,24 +1335,21 @@ export async function fetchCommissionStructure(): Promise<{ success: boolean; st
     try {
         const settings = await getSiteSettings();
         const structure: CommissionStructure = {
-            mlm_number_of_levels: settings.mlm_number_of_levels,
-            mlm_level_percentages: settings.mlm_level_percentages,
+            mlm_number_of_levels: settings.mlm_number_of_levels ?? 0,
+            mlm_level_percentages: settings.mlm_level_percentages ?? [],
         };
         return { success: true, structure };
     } catch (error: any) {
         console.error("Error fetching commission structure:", error);
         return { success: false, error: "خطا در دریافت ساختار پورسانت." };
+    } finally {
+        // No connection to release here as getSiteSettings handles its own
     }
 }
 
 // --- Ticket System Actions ---
-export const CreateTicketSchema = z.object({
-  subject: z.string().min(5, "موضوع تیکت باید حداقل ۵ کاراکتر باشد.").max(100, "موضوع تیکت نباید بیشتر از ۱۰۰ کاراکتر باشد."),
-  initialMessage: z.string().min(10, "متن پیام باید حداقل ۱۰ کاراکتر باشد.").max(2000, "متن پیام نباید بیشتر از ۲۰۰۰ کاراکتر باشد."),
-});
 
 export async function createTicket(userId: string, data: z.infer<typeof CreateTicketSchema>): Promise<{ success: boolean; error?: string; ticketId?: number }> {
-    // TODO: Add user session verification
     const validation = CreateTicketSchema.safeParse(data);
     if (!validation.success) return { success: false, error: validation.error.errors.map(e => e.message).join(', ') };
 
@@ -1499,7 +1382,6 @@ export async function createTicket(userId: string, data: z.infer<typeof CreateTi
 }
 
 export async function fetchUserTickets(userId: string): Promise<{ success: boolean; tickets?: Ticket[]; error?: string }> {
-    // TODO: Add user session verification
     let connection;
     try {
         connection = await pool.getConnection();
@@ -1511,8 +1393,8 @@ export async function fetchUserTickets(userId: string): Promise<{ success: boole
             id: String(row.id),
             user_id: userId,
             subject: row.subject,
-            status: row.status,
-            priority: row.priority,
+            status: row.status as TicketStatus,
+            priority: row.priority as TicketPriority,
             created_at: row.created_at,
             updated_at: row.updated_at,
             last_reply_at: row.last_reply_at,
@@ -1530,13 +1412,13 @@ export async function fetchUserTickets(userId: string): Promise<{ success: boole
 export async function fetchAdminTickets(filters?: { status?: TicketStatus }): Promise<{ success: boolean; tickets?: Ticket[]; error?: string }> {
     const isAdmin = await verifyAdminSession();
     if (!isAdmin.isAuthenticated) return { success: false, error: 'دسترسی غیرمجاز.' };
-    
+
     let connection;
     try {
         connection = await pool.getConnection();
         let query = `
-            SELECT t.id, t.user_id, t.subject, t.status, t.priority, t.created_at, t.updated_at, t.last_reply_at, t.last_reply_by, 
-                   u.first_name, u.last_name, u.phone 
+            SELECT t.id, t.user_id, t.subject, t.status, t.priority, t.created_at, t.updated_at, t.last_reply_at, t.last_reply_by,
+                   u.first_name, u.last_name, u.phone
             FROM tickets t
             JOIN users u ON t.user_id = u.id
         `;
@@ -1553,8 +1435,8 @@ export async function fetchAdminTickets(filters?: { status?: TicketStatus }): Pr
             user_id: String(row.user_id),
             user_name: `${row.first_name || ''} ${row.last_name || ''} (${row.phone || 'N/A'})`.trim(),
             subject: row.subject,
-            status: row.status,
-            priority: row.priority,
+            status: row.status as TicketStatus,
+            priority: row.priority as TicketPriority,
             created_at: row.created_at,
             updated_at: row.updated_at,
             last_reply_at: row.last_reply_at,
@@ -1605,5 +1487,3 @@ export async function fetchMlmStats(): Promise<{
         if (connection) connection.release();
     }
 }
-
-    

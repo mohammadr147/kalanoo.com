@@ -2,33 +2,24 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useForm, SubmitHandler } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import * as z from 'zod';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Loader2, Wallet, ArrowUpCircle, ArrowDownCircle, History } from 'lucide-react';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableCaption } from "@/components/ui/table";
 import { Separator } from '@/components/ui/separator';
-// NOTE: Replace with actual wallet data fetching and withdrawal request logic (non-Firebase)
+import { useAuth } from '@/context/auth-context';
+import { useToast } from '@/hooks/use-toast';
+import { fetchUserWalletData, requestWalletWithdrawal } from '@/app/actions';
+import { WithdrawalRequestSchema } from '@/types'; // Import from types
+import type { Transaction, UserProfile } from '@/types';
 
-// Placeholder Transaction Type
-interface Transaction {
-    id: string;
-    type: 'واریز' | 'برداشت' | 'خرید' | 'پورسانت';
-    amount: number;
-    date: string; // Format: 'YYYY-MM-DD HH:mm:ss' or similar from MySQL
-    description: string;
-}
+type WithdrawalFormData = z.infer<typeof WithdrawalRequestSchema>;
 
-// Placeholder data
-const walletBalance = 125000;
-const dummyTransactions: Transaction[] = [
-    { id: 't1', type: 'پورسانت', amount: 5000, date: '2024-05-05 10:00:00', description: 'پورسانت معرفی کاربر X' },
-    { id: 't2', type: 'خرید', amount: -45000, date: '2024-05-04 11:30:00', description: 'خرید سفارش #ORD-12347' },
-    { id: 't3', type: 'واریز', amount: 100000, date: '2024-05-01 09:00:00', description: 'افزایش اعتبار دستی' },
-    { id: 't4', type: 'برداشت', amount: -25000, date: '2024-04-29 15:00:00', description: 'تسویه حساب به شماره شبا ...' },
-    { id: 't5', type: 'پورسانت', amount: 10000, date: '2024-04-25 12:00:00', description: 'پورسانت معرفی کاربر Y' },
-];
-
-// Helper to format date/time
 const formatDateTime = (dateTimeString: string): string => {
     try {
         const date = new Date(dateTimeString);
@@ -47,39 +38,85 @@ const formatDateTime = (dateTimeString: string): string => {
 }
 
 export default function UserWalletPage() {
+  const { user, loading: authLoading } = useAuth();
+  const { toast } = useToast();
+  const [balance, setBalance] = useState<number | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingData, setLoadingData] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [isSubmittingWithdrawal, setIsSubmittingWithdrawal] = useState(false);
+
+  const form = useForm<WithdrawalFormData>({
+    resolver: zodResolver(WithdrawalRequestSchema),
+    defaultValues: {
+      amount: undefined,
+      shabaNumber: '',
+    },
+  });
+
+  const loadWalletData = async (userId: string) => {
+    setLoadingData(true);
+    setError(null);
+    try {
+      const result = await fetchUserWalletData(userId);
+      if (result.success) {
+        setBalance(result.balance ?? 0);
+        setTransactions(result.transactions ?? []);
+      } else {
+        setError(result.error || "خطا در دریافت اطلاعات کیف پول.");
+        toast({ title: "خطا", description: result.error || "خطا در دریافت اطلاعات کیف پول.", variant: "destructive" });
+      }
+    } catch (err) {
+      setError("خطای پیش‌بینی نشده در ارتباط با سرور.");
+      toast({ title: "خطای سرور", description: "مشکلی در دریافت اطلاعات کیف پول رخ داد.", variant: "destructive" });
+    } finally {
+      setLoadingData(false);
+    }
+  };
 
   useEffect(() => {
-    // --- TODO: Replace with actual API call to fetch wallet data ---
-    const fetchWalletData = async () => {
-        setLoading(true);
-        setError(null);
-        try {
-            await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate API call
-            // const response = await fetch('/api/user/wallet'); const data = await response.json();
-            // setWalletBalance(data.balance);
-            setTransactions(dummyTransactions); // Use dummy data
-        } catch (err) {
-            setError("خطا در دریافت اطلاعات کیف پول.");
-        } finally {
-            setLoading(false);
-        }
-    };
-    fetchWalletData();
-  }, []);
+    if (user?.uid) {
+      loadWalletData(user.uid);
+    } else if (!authLoading) {
+        setLoadingData(false); // Stop loading if user not logged in and auth check is done
+    }
+  }, [user, authLoading, toast]); // Removed toast from dep array to avoid re-fetch on toast change
 
-  const handleWithdrawalRequest = async () => {
-    setIsWithdrawing(true);
-    // --- TODO: Implement API call for withdrawal request ---
-    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate API call
-    console.log("Withdrawal request initiated for amount:", walletBalance);
-    // Handle success/error toast messages based on API response
-    alert("درخواست تسویه حساب ثبت شد. (شبیه‌سازی)"); // Replace with toast
-    setIsWithdrawing(false);
+  const handleWithdrawalSubmit: SubmitHandler<WithdrawalFormData> = async (data) => {
+    if (!user?.uid) return;
+    if (balance === null || data.amount > balance) {
+        form.setError("amount", { type: "manual", message: "مبلغ درخواستی نمی‌تواند بیشتر از موجودی باشد." });
+        return;
+    }
+
+    setIsSubmittingWithdrawal(true);
+    try {
+      const result = await requestWalletWithdrawal(user.uid, data);
+      if (result.success) {
+        toast({ title: "موفقیت", description: "درخواست تسویه حساب شما با موفقیت ثبت شد." });
+        form.reset();
+        if (user?.uid) loadWalletData(user.uid); // Refresh wallet data
+      } else {
+        toast({ title: "خطا", description: result.error || "خطا در ثبت درخواست تسویه.", variant: "destructive" });
+      }
+    } catch (err) {
+      toast({ title: "خطای سرور", description: "مشکلی در ثبت درخواست تسویه رخ داد.", variant: "destructive" });
+    } finally {
+      setIsSubmittingWithdrawal(false);
+    }
   };
+
+  if (authLoading || (loadingData && user)) { // Show loader if auth is loading OR if data is loading for an authenticated user
+    return (
+      <div className="flex justify-center items-center h-40">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user && !authLoading) {
+    return <p className="text-center text-muted-foreground">برای مشاهده کیف پول، لطفاً ابتدا وارد شوید.</p>;
+  }
 
   return (
     <div className="space-y-6">
@@ -92,24 +129,53 @@ export default function UserWalletPage() {
           <Wallet className="h-5 w-5 text-primary" />
         </CardHeader>
         <CardContent>
-          {loading ? (
+          {loadingData ? (
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
           ) : error ? (
              <p className="text-destructive">{error}</p>
           ) : (
              <>
                  <div className="text-3xl font-bold mb-4">
-                    {walletBalance.toLocaleString('fa-IR')} تومان
+                    {(balance ?? 0).toLocaleString('fa-IR')} تومان
                  </div>
-                  <Button
-                      onClick={handleWithdrawalRequest}
-                      disabled={isWithdrawing || walletBalance <= 0}
-                  >
-                      {isWithdrawing ? <Loader2 className="ml-2 h-4 w-4 animate-spin" /> : null}
-                      درخواست تسویه حساب
-                  </Button>
+                 <Separator className="my-4" />
+                 <h3 className="text-lg font-semibold mb-3">درخواست تسویه حساب</h3>
+                 <Form {...form}>
+                    <form onSubmit={form.handleSubmit(handleWithdrawalSubmit)} className="space-y-4">
+                        <FormField
+                            control={form.control}
+                            name="amount"
+                            render={({ field }) => (
+                                <FormItem>
+                                <FormLabel>مبلغ تسویه (تومان)</FormLabel>
+                                <FormControl>
+                                    <Input type="number" placeholder="مثال: 50000" {...field} disabled={isSubmittingWithdrawal} min="1" />
+                                </FormControl>
+                                <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <FormField
+                            control={form.control}
+                            name="shabaNumber"
+                            render={({ field }) => (
+                                <FormItem>
+                                <FormLabel>شماره شبا (بدون IR)</FormLabel>
+                                <FormControl>
+                                    <Input type="text" placeholder="123456789012345678901234" {...field} disabled={isSubmittingWithdrawal} dir="ltr" className="text-left" maxLength={24} />
+                                </FormControl>
+                                <FormMessage />
+                                </FormItem>
+                            )}
+                        />
+                        <Button type="submit" disabled={isSubmittingWithdrawal || (balance ?? 0) <= 0 || !form.formState.isValid}>
+                            {isSubmittingWithdrawal ? <Loader2 className="ml-2 h-4 w-4 animate-spin" /> : null}
+                            ثبت درخواست
+                        </Button>
+                    </form>
+                 </Form>
                   <p className="text-xs text-muted-foreground mt-2">
-                    (تسویه به شماره شبای ثبت شده در پروفایل انجام خواهد شد)
+                    (تسویه به شماره شبای وارد شده انجام خواهد شد. حداقل مبلغ تسویه طبق تنظیمات سایت است.)
                   </p>
              </>
           )}
@@ -126,13 +192,13 @@ export default function UserWalletPage() {
               </CardTitle>
           </CardHeader>
           <CardContent>
-             {loading && (
+             {loadingData && !error && ( // Show loader only if loading and no error
                  <div className="flex justify-center items-center h-20">
                     <Loader2 className="h-6 w-6 animate-spin text-primary" />
                  </div>
              )}
-             {error && <p className="text-center text-destructive">{error}</p>}
-             {!loading && !error && (
+             {!loadingData && error && <p className="text-center text-destructive">{error}</p>}
+             {!loadingData && !error && (
                  <Table>
                     <TableCaption>آخرین تراکنش‌های کیف پول شما</TableCaption>
                     <TableHeader>
@@ -141,6 +207,7 @@ export default function UserWalletPage() {
                         <TableHead>مبلغ (تومان)</TableHead>
                         <TableHead>تاریخ</TableHead>
                         <TableHead>توضیحات</TableHead>
+                        <TableHead>وضعیت</TableHead>
                         </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -156,13 +223,14 @@ export default function UserWalletPage() {
                             <TableCell className={`font-semibold ${tx.amount > 0 ? 'text-green-700' : 'text-red-700'}`}>
                                 {tx.amount.toLocaleString('fa-IR')}
                             </TableCell>
-                            <TableCell>{formatDateTime(tx.date)}</TableCell>
-                            <TableCell>{tx.description}</TableCell>
+                            <TableCell>{formatDateTime(tx.created_at as string)}</TableCell>
+                            <TableCell>{tx.description || '-'}</TableCell>
+                            <TableCell>{tx.status || '-'}</TableCell>
                             </TableRow>
                         ))
                         ) : (
                         <TableRow>
-                            <TableCell colSpan={4} className="h-24 text-center text-muted-foreground">
+                            <TableCell colSpan={5} className="h-24 text-center text-muted-foreground">
                                 هیچ تراکنشی یافت نشد.
                             </TableCell>
                         </TableRow>

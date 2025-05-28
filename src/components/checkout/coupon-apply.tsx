@@ -6,38 +6,41 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Loader2, Tag, CheckCircle, XCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { validateCouponCode } from '@/app/actions'; // Import the consolidated validation action
+import { validateCouponCode } from '@/app/actions';
 import type { Coupon } from '@/types';
+import { ValidateCouponCodeSchema } from '@/types'; // Import from types
+import * as z from 'zod';
 
 interface CouponApplyProps {
   cartTotal: number;
-  onCouponApply: (coupon: Coupon, discountAmount: number) => void; // Callback with coupon details and discount amount
-  onCouponRemove: () => void; // Callback to remove applied coupon
+  onCouponApply: (coupon: Coupon, discountAmount: number) => void;
+  onCouponRemove: () => void;
   appliedCouponCode: string | null | undefined;
 }
 
 export function CouponApply({ cartTotal, onCouponApply, onCouponRemove, appliedCouponCode }: CouponApplyProps) {
   const [couponCode, setCouponCode] = useState('');
   const [loading, setLoading] = useState(false);
-  const [isValidating, setIsValidating] = useState(false); // Separate state for validation loading
+  const [isValidating, setIsValidating] = useState(false);
   const { toast } = useToast();
 
   const handleValidateCoupon = async () => {
-    if (!couponCode.trim()) {
-        toast({ title: "کد تخفیف را وارد کنید", variant: "destructive" });
+    const parsedInput = ValidateCouponCodeSchema.safeParse({ code: couponCode, cartTotal });
+    if (!parsedInput.success) {
+        toast({ title: "کد تخفیف نامعتبر", description: parsedInput.error.errors[0].message, variant: "destructive" });
         return;
     }
 
     setLoading(true);
     setIsValidating(true);
     try {
-      const result = await validateCouponCode({ code: couponCode, cartTotal });
+      const result = await validateCouponCode(parsedInput.data);
 
       if (result.success && result.isValid && result.coupon && result.discountAmount !== undefined) {
         onCouponApply(result.coupon, result.discountAmount);
         toast({ title: "موفقیت", description: `کد تخفیف ${result.coupon.code} با موفقیت اعمال شد.` });
       } else {
-        onCouponRemove(); // Ensure any previously applied coupon is removed if validation fails
+        onCouponRemove();
         toast({
           title: "خطا در اعمال کد تخفیف",
           description: result.error || "کد تخفیف نامعتبر یا شرایط استفاده رعایت نشده است.",
@@ -46,7 +49,7 @@ export function CouponApply({ cartTotal, onCouponApply, onCouponRemove, appliedC
       }
     } catch (error) {
       console.error("Error validating coupon:", error);
-       onCouponRemove(); // Remove coupon on unexpected error
+       onCouponRemove();
       toast({
         title: "خطای پیش بینی نشده",
         description: "مشکلی در بررسی کد تخفیف رخ داد.",
@@ -59,7 +62,7 @@ export function CouponApply({ cartTotal, onCouponApply, onCouponRemove, appliedC
   };
 
   const handleRemoveCoupon = () => {
-    setCouponCode(''); // Clear input field
+    setCouponCode('');
     onCouponRemove();
     toast({ title: "کد تخفیف حذف شد." });
   };
@@ -72,8 +75,8 @@ export function CouponApply({ cartTotal, onCouponApply, onCouponRemove, appliedC
                 id="coupon-code"
                 placeholder="کد تخفیف خود را وارد کنید"
                 value={couponCode}
-                onChange={(e) => setCouponCode(e.target.value.toUpperCase())} // Auto uppercase
-                disabled={loading || !!appliedCouponCode} // Disable if loading or coupon already applied
+                onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                disabled={loading || !!appliedCouponCode}
                 className="flex-1"
             />
              {!appliedCouponCode ? (
@@ -94,14 +97,14 @@ export function CouponApply({ cartTotal, onCouponApply, onCouponRemove, appliedC
                      variant="destructive"
                      className="whitespace-nowrap"
                      size="sm"
-                     disabled={loading} // Disable while any loading is happening
+                     disabled={loading}
                  >
                      <XCircle className="ml-2 h-4 w-4" />
                      حذف کد
                  </Button>
              )}
         </div>
-         {appliedCouponCode && !isValidating && ( // Show success only when not actively validating
+         {appliedCouponCode && !isValidating && (
              <p className="text-sm text-green-600 flex items-center gap-1">
                  <CheckCircle className="h-4 w-4" />
                  کد تخفیف {appliedCouponCode} اعمال شد.

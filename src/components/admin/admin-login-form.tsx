@@ -13,15 +13,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2 } from 'lucide-react';
-import { loginAdmin } from '@/app/actions'; // Import the consolidated server action
+import { loginAdmin } from '@/app/actions';
+import { adminLoginSchema } from '@/types'; // Import from types
 
-// Validation Schema using Zod
-const loginSchema = z.object({
-  username: z.string().min(1, { message: "نام کاربری الزامی است." }),
-  password: z.string().min(1, { message: "رمز عبور الزامی است." }),
-});
-
-type LoginFormData = z.infer<typeof loginSchema>;
+type LoginFormData = z.infer<typeof adminLoginSchema>;
 
 export function AdminLoginForm() {
   const router = useRouter();
@@ -29,7 +24,7 @@ export function AdminLoginForm() {
   const [loading, setLoading] = useState(false);
 
   const form = useForm<LoginFormData>({
-    resolver: zodResolver(loginSchema),
+    resolver: zodResolver(adminLoginSchema),
     defaultValues: {
       username: '',
       password: '',
@@ -43,18 +38,14 @@ export function AdminLoginForm() {
 
       if (result.success) {
         toast({ title: "ورود موفقیت آمیز بود" });
-        // Directly push to the dashboard. Middleware will handle the rest.
         router.push('/admin/dashboard');
-        // Refresh might not be needed if push triggers middleware correctly
-        // router.refresh();
-
       } else {
         toast({
           title: "خطا در ورود",
           description: result.error || "نام کاربری یا رمز عبور اشتباه است.",
           variant: "destructive",
         });
-        setLoading(false); // Reset loading state on failure
+        setLoading(false);
       }
     } catch (error) {
       console.error("Admin login error:", error);
@@ -63,9 +54,8 @@ export function AdminLoginForm() {
         description: "مشکلی در سرور رخ داده است. لطفاً دوباره تلاش کنید.",
         variant: "destructive",
       });
-       setLoading(false); // Reset loading state on error
+       setLoading(false);
     }
-     // No need to set loading to false on success, as navigation will occur.
   };
 
   return (
@@ -110,10 +100,6 @@ export function AdminLoginForm() {
           </form>
         </Form>
       </CardContent>
-      {/* Optional: Add a footer for links like "Forgot password?" if needed later */}
-      {/* <CardFooter>
-        </CardFooter> */}
     </Card>
   );
 }
-

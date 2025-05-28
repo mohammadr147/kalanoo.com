@@ -13,33 +13,18 @@ import { Switch } from "@/components/ui/switch";
 import { Loader2, Upload } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { createProduct, updateProduct, fetchCategoriesForForm } from '@/app/actions';
-import type { Product, Category } from '@/types';
+import type { Product as ProductType, Category } from '@/types'; // Renamed Product to ProductType to avoid conflict
+import { ProductSchema } from '@/types'; // Import from types
 import Image from 'next/image';
 import { cn } from '@/lib/utils';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from '@/components/ui/separator';
 
-const productFormSchema = z.object({
-  name: z.string().min(3, "نام محصول باید حداقل ۳ کاراکتر باشد."),
-  description: z.string().optional().nullable(),
-  price: z.coerce.number().positive("قیمت نقدی باید مثبت باشد."),
-  installment_price: z.coerce.number().positive("قیمت اقساطی باید مثبت باشد.").optional().nullable(),
-  check_price: z.coerce.number().positive("قیمت چکی باید مثبت باشد.").optional().nullable(),
-  original_price: z.coerce.number().positive("قیمت اصلی (قبل از تخفیف) باید مثبت باشد.").optional().nullable(),
-  discount_percent: z.coerce.number().min(0).max(100, "درصد تخفیف باید بین ۰ تا ۱۰۰ باشد.").optional().nullable(),
-  image_url: z.string().optional().nullable(), // Will be base64 or existing URL
-  category_id: z.string().optional().nullable(),
-  stock: z.coerce.number().int().min(0, "موجودی نمی‌تواند منفی باشد.").default(0),
-  is_active: z.boolean().default(true),
-  is_featured: z.boolean().default(false),
-  is_new: z.boolean().default(false),
-});
-
-type ProductFormData = z.infer<typeof productFormSchema>;
+type ProductFormData = z.infer<typeof ProductSchema>;
 
 interface ProductFormProps {
-  product?: Product;
+  product?: ProductType;
   mode: 'create' | 'edit';
   onFormSubmitSuccess: () => void;
   onCancel: () => void;
@@ -52,7 +37,7 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
   const [categories, setCategories] = useState<Pick<Category, 'id' | 'name'>[]>([]);
 
   const form = useForm<ProductFormData>({
-    resolver: zodResolver(productFormSchema),
+    resolver: zodResolver(ProductSchema),
     defaultValues: {
       name: product?.name || '',
       description: product?.description || '',
@@ -120,16 +105,14 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
       let result;
       const payload = {
         ...data,
-         // Ensure null values are sent correctly
          installment_price: data.installment_price || null,
          check_price: data.check_price || null,
          original_price: data.original_price || null,
          discount_percent: data.discount_percent || null,
          category_id: data.category_id || null,
          description: data.description || null,
-         image_url: data.image_url || null, // Will be base64 or URL
+         image_url: data.image_url || null,
       };
-
 
       if (mode === 'edit' && product?.id) {
         result = await updateProduct(Number(product.id), payload);
@@ -167,7 +150,6 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
             </FormItem>
           )}
         />
-
         <FormField
           control={form.control}
           name="description"
@@ -181,10 +163,8 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
             </FormItem>
           )}
         />
-
         <Separator />
         <h3 className="text-lg font-medium">قیمت‌گذاری و موجودی</h3>
-
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
              <FormField
                 control={form.control}
@@ -229,7 +209,6 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
                 )}
             />
         </div>
-
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
            <FormField
                 control={form.control}
@@ -273,10 +252,8 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
             )}
             />
         </div>
-
          <Separator />
          <h3 className="text-lg font-medium">دسته‌بندی و تصویر</h3>
-
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
              <FormField
                 control={form.control}
@@ -301,7 +278,6 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
                 </FormItem>
                 )}
             />
-
              <FormField
                 control={form.control}
                 name="image_url"
@@ -337,11 +313,8 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
                 )}
                 />
         </div>
-          {/* TODO: Add multi-image upload capability */}
-
         <Separator />
         <h3 className="text-lg font-medium">وضعیت نمایش</h3>
-
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <FormField
                 control={form.control}
@@ -386,7 +359,6 @@ export function ProductForm({ product, mode, onFormSubmitSuccess, onCancel }: Pr
                 )}
             />
         </div>
-
         <div className="flex justify-end gap-2 pt-4 sticky bottom-0 bg-background pb-4">
           <Button type="button" variant="outline" onClick={onCancel} disabled={loading}>
             انصراف
